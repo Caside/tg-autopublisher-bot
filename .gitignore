@@ -169,3 +169,9 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+# Игнорировать всё содержимое папки data
+data/*
+
+# Но сохранять саму папку data (чтобы она создавалась при клонировании)
+!data/.gitkeep
