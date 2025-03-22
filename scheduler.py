@@ -1,0 +1,234 @@
+"""
+Модуль планировщика для автоматической генерации и публикации постов по расписанию.
+"""
+
+import asyncio
+import logging
+from datetime import datetime, timedelta
+import pytz
+import time
+import random
+from typing import List, Dict, Optional
+
+from config import TIMEZONE, CHANNEL_ID
+from schedule_config import SCHEDULE_CONFIG
+from deepseek_client import DeepSeekClient
+from database import Database
+
+# Настройка логирования
+logger = logging.getLogger('scheduler')
+logger.setLevel(logging.INFO)
+
+# Получаем часовой пояс
+tz = pytz.timezone(TIMEZONE)
+
+class PostScheduler:
+    """Планировщик для генерации и публикации постов по расписанию."""
+    
+    def __init__(self, bot):
+        self.bot = bot
+        self.db = Database()
+        self.deepseek_client = DeepSeekClient()
+        self.config = SCHEDULE_CONFIG
+        self.running = False
+        self.next_check_time = None
+        
+    async def start(self):
+        """Запускает планировщик."""
+        if self.running:
+            logger.warning("Планировщик уже запущен.")
+            return
+        
+        self.running = True
+        logger.info("Планировщик запущен.")
+        
+        # Если настроено, генерируем пост на старте
+        if self.config["generate_on_startup"] and self.is_within_schedule():
+            await self.schedule_next_post(force=True)
+        
+        # Запускаем основной цикл планировщика
+        await self.scheduler_loop()
+    
+    async def stop(self):
+        """Останавливает планировщик."""
+        self.running = False
+        logger.info("Планировщик остановлен.")
+    
+    def is_within_schedule(self, dt: Optional[datetime] = None) -> bool:
+        """Проверяет, находится ли указанное время в рамках расписания."""
+        if not self.config["enabled"]:
+            return False
+        
+        if dt is None:
+            dt = datetime.now(tz)
+        
+        # Проверяем, является ли день подходящим
+        if dt.weekday() not in self.config["days_of_week"]:
+            return False
+        
+        # Если указаны конкретные времена, проверяем их
+        if self.config["specific_times"]:
+            for time_spec in self.config["specific_times"]:
+                if dt.hour == time_spec["hour"] and dt.minute == time_spec["minute"]:
+                    return True
+            return False
+        
+        # Проверяем, находится ли время в диапазоне start_time - end_time
+        start_hour = self.config["start_time"]["hour"]
+        start_minute = self.config["start_time"]["minute"]
+        end_hour = self.config["end_time"]["hour"]
+        end_minute = self.config["end_time"]["minute"]
+        
+        start_time = dt.replace(hour=start_hour, minute=start_minute, second=0, microsecond=0)
+        end_time = dt.replace(hour=end_hour, minute=end_minute, second=0, microsecond=0)
+        
+        return start_time <= dt <= end_time
+    
+    def calculate_next_post_time(self) -> Optional[datetime]:
+        """Рассчитывает время следующей публикации."""
+        now = datetime.now(tz)
+        
+        # Если указаны конкретные времена публикаций
+        if self.config["specific_times"]:
+            next_times = []
+            for day_offset in range(7):  # Проверяем на неделю вперед
+                check_date = now.date() + timedelta(days=day_offset)
+                check_weekday = check_date.weekday()
+                
+                if check_weekday in self.config["days_of_week"]:
+                    for time_spec in self.config["specific_times"]:
+                        post_time = datetime(
+                            check_date.year, 
+                            check_date.month, 
+                            check_date.day, 
+                            time_spec["hour"], 
+                            time_spec["minute"], 
+                            0
+                        )
+                        post_time = tz.localize(post_time)
+                        
+                        if post_time > now:
+                            next_times.append(post_time)
+            
+            if next_times:
+                return min(next_times)
+            return None
+        
+        # Если используются интервалы
+        interval = self.config["interval_minutes"]
+        
+        # Начинаем с текущего дня
+        day_offset = 0
+        while day_offset < 7:  # Ищем в пределах недели
+            check_date = now.date() + timedelta(days=day_offset)
+            check_weekday = check_date.weekday()
+            
+            if check_weekday in self.config["days_of_week"]:
+                # Начальное время публикаций для этого дня
+                start_time = datetime(
+                    check_date.year, 
+                    check_date.month, 
+                    check_date.day, 
+                    self.config["start_time"]["hour"], 
+                    self.config["start_time"]["minute"], 
+                    0
+                )
+                start_time = tz.localize(start_time)
+                
+                # Конечное время публикаций для этого дня
+                end_time = datetime(
+                    check_date.year, 
+                    check_date.month, 
+                    check_date.day, 
+                    self.config["end_time"]["hour"], 
+                    self.config["end_time"]["minute"], 
+                    0
+                )
+                end_time = tz.localize(end_time)
+                
+                # Если мы уже прошли конечное время сегодня, переходим к следующему дню
+                if now > end_time and day_offset == 0:
+                    day_offset += 1
+                    continue
+                
+                # Если мы находимся перед началом сегодня, следующая публикация - в начале
+                if now < start_time:
+                    return start_time
+                
+                # Вычисляем следующее время публикации
+                minutes_since_start = (now - start_time).total_seconds() / 60
+                intervals_passed = int(minutes_since_start / interval)
+                
+                # Следующий интервал
+                next_interval = (intervals_passed + 1) * interval
+                next_time = start_time + timedelta(minutes=next_interval)
+                
+                # Если следующее время не превышает конечное время, возвращаем его
+                if next_time <= end_time:
+                    return next_time
+            
+            # Переходим к следующему дню
+            day_offset += 1
+        
+        return None
+    
+    async def generate_post(self) -> Optional[str]:
+        """Генерирует новый пост с помощью DeepSeek API."""
+        # Оборачиваем синхронный вызов в асинхронную функцию
+        loop = asyncio.get_running_loop()
+        post = await loop.run_in_executor(None, self.deepseek_client.generate_post)
+        return post
+    
+    async def schedule_next_post(self, force: bool = False):
+        """Планирует следующий пост для публикации."""
+        if not self.config["enabled"] and not force:
+            logger.info("Автоматическое планирование выключено в конфигурации.")
+            return
+        
+        next_time = self.calculate_next_post_time()
+        
+        if not next_time and not force:
+            logger.warning("Не удалось рассчитать время следующей публикации.")
+            return
+        
+        # Если force=True и next_time is None, используем текущее время + 1 минута
+        if force and not next_time:
+            next_time = datetime.now(tz) + timedelta(minutes=1)
+        
+        # Всегда генерируем новый пост для максимального разнообразия
+        logger.info("Генерация нового поста...")
+        post_text = await self.generate_post()
+        
+        if not post_text:
+            logger.error("Не удалось получить текст поста.")
+            return
+        
+        # Добавляем пост в расписание
+        post_id = self.db.add_scheduled_post(next_time, post_text, is_auto_generated=True)
+        
+        logger.info(f"Запланирован автоматический пост (id={post_id}) на {next_time.strftime('%Y-%m-%d %H:%M:%S')}")
+        return post_id
+    
+    async def scheduler_loop(self):
+        """Основной цикл планировщика."""
+        while self.running:
+            try:
+                # Проверяем, нужно ли планировать следующий пост
+                if not self.next_check_time or datetime.now(tz) >= self.next_check_time:
+                    
+                    # Планируем следующий пост
+                    if self.is_within_schedule():
+                        await self.schedule_next_post()
+                    
+                    # Устанавливаем время следующей проверки через 5 минут
+                    self.next_check_time = datetime.now(tz) + timedelta(minutes=5)
+                
+                # Удаляем старые отправленные посты
+                self.db.clean_old_sent_posts()
+                
+                # Спим 60 секунд
+                await asyncio.sleep(60)
+                
+            except Exception as e:
+                logger.error(f"Ошибка в цикле планировщика: {str(e)}")
+                await asyncio.sleep(60)  # В случае ошибки тоже ждем 60 секунд 

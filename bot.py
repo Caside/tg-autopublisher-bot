@@ -1,5 +1,5 @@
 import asyncio
-from datetime import datetime
+from datetime import datetime, timedelta
 import sqlite3
 import logging
 from aiogram import Bot, Dispatcher, types
@@ -11,6 +11,10 @@ import pytz
 import logging.handlers
 import csv
 from io import StringIO
+
+# Импортируем новые модули
+from scheduler import PostScheduler
+from deepseek_client import DeepSeekClient
 
 # Настройка расширенного логирования
 logger = logging.getLogger('scheduler_bot')
@@ -37,6 +41,9 @@ dp = Dispatcher()
 # Инициализация базы данных
 db = Database()
 
+# Инициализация планировщика
+scheduler = PostScheduler(bot)
+
 @dp.message(Command("start"))
 async def cmd_start(message: Message):
     user_info = f"user_id={message.from_user.id}, username=@{message.from_user.username}"
@@ -45,7 +52,9 @@ async def cmd_start(message: Message):
     await message.answer(
         "Привет! Я бот для отложенной публикации постов.\n"
         "Используйте команду /schedule чтобы запланировать пост.\n"
-        "Формат: /schedule YYYY-MM-DD HH:MM текст поста"
+        "Формат: /schedule YYYY-MM-DD HH:MM текст поста\n\n"
+        "Также я могу автоматически генерировать и публиковать посты с помощью DeepSeek AI.\n"
+        "Используйте /autogen_status для просмотра статуса автоматических публикаций."
     )
 
 @dp.message(Command("schedule"))
@@ -111,15 +120,10 @@ async def cmd_help(message: Message):
         "Текст второго поста\n"
         "тоже с переносами\n"
         "===\n\n"
-        "Пример:\n"
-        "===\n"
-        "2024-03-20 15:30\n"
-        "Первый пост\n"
-        "с переносом строки\n"
-        "===\n"
-        "2024-03-21 12:00\n"
-        "Второй пост\n"
-        "тоже с переносом"
+        "/autogen_status - Просмотр статуса автоматической генерации постов\n\n"
+        "/generate_post - Сгенерировать тестовый пост с помощью AI\n\n"
+        "/autogen_now - Сгенерировать и запланировать пост на ближайшее время\n\n"
+        "/publish_now - Немедленно сгенерировать и опубликовать пост в канал"
     )
 
 @dp.message(Command("bulk_schedule"))
@@ -195,6 +199,168 @@ async def cmd_bulk_schedule(message: Message):
     
     await message.answer(report)
 
+@dp.message(Command("autogen_status"))
+async def cmd_autogen_status(message: Message):
+    """Просмотр статуса автоматической генерации постов."""
+    user_info = f"user_id={message.from_user.id}, username=@{message.from_user.username}"
+    logger.info(f"Получена команда /autogen_status от пользователя: {user_info}")
+    
+    # Готовим информацию о статусе
+    from schedule_config import SCHEDULE_CONFIG
+    config = SCHEDULE_CONFIG
+    
+    enabled = "Включено" if config["enabled"] else "Выключено"
+    
+    # Дни недели
+    days_names = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
+    days = ", ".join(days_names[day] for day in config["days_of_week"])
+    
+    # Время публикаций
+    if config["specific_times"]:
+        times = ", ".join(f"{t['hour']:02d}:{t['minute']:02d}" for t in config["specific_times"])
+        schedule_info = f"В определенное время: {times}"
+    else:
+        start = f"{config['start_time']['hour']:02d}:{config['start_time']['minute']:02d}"
+        end = f"{config['end_time']['hour']:02d}:{config['end_time']['minute']:02d}"
+        interval = config["interval_minutes"]
+        schedule_info = f"С {start} до {end} каждые {interval} минут"
+    
+    # Кэширование
+    cache_count = db.count_cached_posts()
+    
+    # Следующая публикация
+    next_time = scheduler.calculate_next_post_time()
+    next_time_str = next_time.strftime("%Y-%m-%d %H:%M:%S") if next_time else "Не определено"
+    
+    # Формируем ответное сообщение
+    status_message = (
+        f"Статус автоматических публикаций:\n\n"
+        f"Состояние: {enabled}\n"
+        f"Дни публикаций: {days}\n"
+        f"Расписание: {schedule_info}\n"
+        f"Кэшировано постов: {cache_count}\n"
+        f"Следующая публикация: {next_time_str}\n\n"
+        f"Часовой пояс: {TIMEZONE}"
+    )
+    
+    await message.answer(status_message)
+
+@dp.message(Command("generate_post"))
+async def cmd_generate_post(message: Message):
+    """Генерирует тестовый пост с помощью DeepSeek API."""
+    user_info = f"user_id={message.from_user.id}, username=@{message.from_user.username}"
+    logger.info(f"Получена команда /generate_post от пользователя: {user_info}")
+    
+    # Отправляем сообщение о начале генерации
+    await message.answer("Генерирую пост с помощью DeepSeek API... Это может занять несколько секунд.")
+    
+    # Генерируем пост
+    post = await scheduler.generate_post()
+    
+    if post:
+        # Добавляем в кэш
+        db.add_generated_post_to_cache(post)
+        
+        await message.answer(
+            f"Сгенерированный пост:\n\n"
+            f"{post}\n\n"
+            f"Пост также добавлен в кэш для будущего использования."
+        )
+    else:
+        await message.answer(
+            "Не удалось сгенерировать пост. Пожалуйста, проверьте настройки API DeepSeek "
+            "или попробуйте позже."
+        )
+
+@dp.message(Command("autogen_now"))
+async def cmd_autogen_now(message: Message):
+    """Генерирует и планирует пост на ближайшее время."""
+    user_info = f"user_id={message.from_user.id}, username=@{message.from_user.username}"
+    logger.info(f"Получена команда /autogen_now от пользователя: {user_info}")
+    
+    # Отправляем сообщение о начале генерации
+    await message.answer("Генерирую и планирую пост... Это может занять несколько секунд.")
+    
+    # Устанавливаем время публикации через 2 минуты
+    scheduled_time = datetime.now(tz) + timedelta(minutes=2)
+    
+    # Пытаемся получить пост из кэша или генерируем новый
+    post_text = db.get_unused_cached_post()
+    
+    if not post_text:
+        # Генерируем пост
+        post_text = await scheduler.generate_post()
+    
+    if post_text:
+        # Добавляем в расписание
+        post_id = db.add_scheduled_post(scheduled_time, post_text, is_auto_generated=True)
+        
+        await message.answer(
+            f"Пост успешно запланирован на {scheduled_time.strftime('%Y-%m-%d %H:%M:%S')}.\n\n"
+            f"Предварительный просмотр:\n\n"
+            f"{post_text[:200]}{'...' if len(post_text) > 200 else ''}"
+        )
+    else:
+        await message.answer(
+            "Не удалось сгенерировать пост. Пожалуйста, проверьте настройки API DeepSeek "
+            "или попробуйте позже."
+        )
+
+@dp.message(Command("publish_now"))
+async def cmd_publish_now(message: Message):
+    """Немедленно генерирует и публикует пост в канал."""
+    user_info = f"user_id={message.from_user.id}, username=@{message.from_user.username}"
+    logger.info(f"Получена команда /publish_now от пользователя: {user_info}")
+    
+    # Отправляем сообщение о начале генерации
+    status_msg = await message.answer("Генерирую и публикую пост в канал... Это может занять несколько секунд.")
+    
+    try:
+        # Пытаемся получить пост из кэша или генерируем новый
+        post_text = db.get_unused_cached_post()
+        
+        if not post_text:
+            # Сообщаем о генерации
+            await status_msg.edit_text("Кэш пуст. Генерирую новый пост с помощью DeepSeek API...")
+            
+            # Генерируем новый пост
+            post_text = await scheduler.generate_post()
+        
+        if not post_text:
+            await status_msg.edit_text(
+                "Не удалось сгенерировать пост. Пожалуйста, проверьте настройки API DeepSeek "
+                "или попробуйте позже."
+            )
+            return
+        
+        # Публикуем сгенерированный пост напрямую в канал
+        await status_msg.edit_text(f"Отправляю пост в канал {CHANNEL_ID}...")
+        
+        # Отправляем в канал
+        sent_message = await bot.send_message(CHANNEL_ID, post_text)
+        
+        # Сообщаем об успешной отправке
+        await status_msg.edit_text(
+            f"✅ Пост успешно опубликован в канале {CHANNEL_ID}!\n\n"
+            f"Предварительный просмотр:\n\n"
+            f"{post_text[:200]}{'...' if len(post_text) > 200 else ''}"
+        )
+        
+        # Записываем в базу как уже отправленный (для истории)
+        current_time = datetime.now(tz)
+        post_id = db.add_scheduled_post(current_time, post_text, is_auto_generated=True)
+        db.mark_post_as_sent(post_id)
+        
+        logger.info(f"Пост успешно опубликован в канале пользователем {user_info}")
+        
+    except Exception as e:
+        error_msg = f"Произошла ошибка при публикации поста: {str(e)}"
+        logger.error(error_msg)
+        await status_msg.edit_text(
+            f"⚠️ Ошибка при публикации поста: {str(e)}\n"
+            f"Пожалуйста, проверьте настройки и права бота в канале."
+        )
+
 async def check_scheduled_posts():
     while True:
         try:
@@ -221,8 +387,13 @@ async def check_scheduled_posts():
 
 async def main():
     logger.info(f"Бот запущен. Часовой пояс: {TIMEZONE}")
+    
     # Запускаем фоновую задачу проверки постов
     asyncio.create_task(check_scheduled_posts())
+    
+    # Запускаем планировщик
+    asyncio.create_task(scheduler.start())
+    
     # Запускаем бота
     await dp.start_polling(bot)
 
