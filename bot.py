@@ -362,23 +362,33 @@ async def cmd_publish_now(message: Message):
         )
 
 async def check_scheduled_posts():
+    """Проверяет и публикует запланированные посты."""
+    logger.info("Запуск проверки запланированных постов")
     while True:
         try:
             posts = db.get_pending_posts()
             current_time = datetime.now(tz)
+            logger.debug(f"Текущее время: {current_time}, найдено постов: {len(posts)}")
             
             for post in posts:
-                post_time = datetime.strptime(post[1], "%Y-%m-%d %H:%M:%S")
-                post_time = tz.localize(post_time)
-                
-                if post_time <= current_time:
-                    try:
-                        logger.info(f"Отправка запланированного поста (id={post[0]}) в канал {CHANNEL_ID}")
-                        await bot.send_message(CHANNEL_ID, post[2])
-                        db.mark_post_as_sent(post[0])
-                        logger.info(f"Пост успешно отправлен (id={post[0]})")
-                    except Exception as e:
-                        logger.error(f"Ошибка при отправке поста (id={post[0]}): {str(e)}")
+                post_id, post_time_str, post_text = post
+                try:
+                    # Парсим время из базы данных
+                    post_time = datetime.fromisoformat(post_time_str.replace(' ', 'T'))
+                    post_time = tz.localize(post_time)
+                    
+                    logger.debug(f"Проверка поста {post_id}: запланированное время {post_time}, текущее время {current_time}")
+                    
+                    if post_time <= current_time:
+                        try:
+                            logger.info(f"Отправка запланированного поста (id={post_id}) в канал {CHANNEL_ID}")
+                            await bot.send_message(CHANNEL_ID, post_text)
+                            db.mark_post_as_sent(post_id)
+                            logger.info(f"Пост успешно отправлен (id={post_id})")
+                        except Exception as e:
+                            logger.error(f"Ошибка при отправке поста (id={post_id}): {str(e)}")
+                except Exception as e:
+                    logger.error(f"Ошибка при обработке поста {post_id}: {str(e)}")
         
         except Exception as e:
             logger.error(f"Ошибка в процессе проверки постов: {str(e)}")
