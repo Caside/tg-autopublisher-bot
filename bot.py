@@ -5,6 +5,7 @@ import pytz
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from aiogram.types import Message
+from aiogram.exceptions import TelegramNetworkError
 from config import BOT_TOKEN, CHANNEL_ID, TIMEZONE
 from deepseek_client import DeepSeekClient
 from schedule_config import SCHEDULE_CONFIG
@@ -161,21 +162,37 @@ async def schedule_posts():
 
 async def publish_scheduled_post():
     """Публикует пост по расписанию."""
-    try:
-        logger.info("Генерация и публикация поста по расписанию")
-        
-        # Генерируем новый пост
-        post_text = await deepseek_client.generate_post()
-        
-        if post_text:
-            # Публикуем в канал
-            await bot.send_message(CHANNEL_ID, post_text)
-            logger.info("Пост успешно опубликован по расписанию")
-        else:
-            logger.error("Не удалось сгенерировать пост для публикации по расписанию")
+    max_retries = 3
+    retry_delay = 5  # секунды
+    
+    for attempt in range(max_retries):
+        try:
+            logger.info("Генерация и публикация поста по расписанию")
             
-    except Exception as e:
-        logger.error(f"Ошибка при публикации поста по расписанию: {str(e)}")
+            # Генерируем новый пост
+            post_text = await deepseek_client.generate_post()
+            
+            if post_text:
+                # Публикуем в канал
+                await bot.send_message(CHANNEL_ID, post_text)
+                logger.info("Пост успешно опубликован по расписанию")
+                return
+            else:
+                logger.error("Не удалось сгенерировать пост для публикации по расписанию")
+                return
+                
+        except TelegramNetworkError as e:
+            logger.error(f"Ошибка сети при публикации поста по расписанию (попытка {attempt + 1}/{max_retries}): {str(e)}")
+            if attempt < max_retries - 1:
+                await asyncio.sleep(retry_delay)
+                continue
+            else:
+                logger.error("Превышено максимальное количество попыток публикации поста")
+                return
+                
+        except Exception as e:
+            logger.error(f"Ошибка при публикации поста по расписанию: {str(e)}")
+            return
 
 async def main():
     logger.info(f"Бот запущен. Часовой пояс: {TIMEZONE}")
@@ -183,8 +200,18 @@ async def main():
     # Запускаем планировщик публикаций
     asyncio.create_task(schedule_posts())
     
-    # Запускаем бота
-    await dp.start_polling(bot)
+    # Запускаем бота с обработкой ошибок
+    while True:
+        try:
+            await dp.start_polling(bot)
+        except TelegramNetworkError as e:
+            logger.error(f"Ошибка подключения к Telegram API: {str(e)}")
+            logger.info("Повторная попытка подключения через 5 секунд...")
+            await asyncio.sleep(5)
+        except Exception as e:
+            logger.error(f"Неожиданная ошибка: {str(e)}")
+            logger.info("Повторная попытка подключения через 5 секунд...")
+            await asyncio.sleep(5)
 
 if __name__ == "__main__":
     asyncio.run(main())
