@@ -6,13 +6,27 @@ from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from aiogram.types import Message
 from aiogram.exceptions import TelegramNetworkError
-from config import BOT_TOKEN, CHANNEL_ID, TIMEZONE
+from config import BOT_TOKEN, CHANNEL_ID, TIMEZONE, DEEPSEEK_API_KEY
 from deepseek_client import DeepSeekClient
 from schedule_config import SCHEDULE_CONFIG
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Проверка наличия всех необходимых переменных окружения
+required_env_vars = {
+    'BOT_TOKEN': BOT_TOKEN,
+    'CHANNEL_ID': CHANNEL_ID,
+    'TIMEZONE': TIMEZONE,
+    'DEEPSEEK_API_KEY': DEEPSEEK_API_KEY
+}
+
+missing_vars = [var for var, value in required_env_vars.items() if not value]
+if missing_vars:
+    error_msg = f"Отсутствуют следующие переменные окружения: {', '.join(missing_vars)}"
+    logger.error(error_msg)
+    raise ValueError(error_msg)
 
 # Инициализация бота и диспетчера
 bot = Bot(token=BOT_TOKEN)
