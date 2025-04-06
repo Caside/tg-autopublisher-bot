@@ -122,6 +122,7 @@ async def schedule_posts():
         try:
             if SCHEDULE_CONFIG["enabled"]:
                 current_time = datetime.now(tz)
+                logger.info(f"Текущее время: {current_time.strftime('%H:%M:%S')}")
                 
                 # Проверяем, нужно ли публиковать пост сейчас
                 if SCHEDULE_CONFIG["specific_times"]:
@@ -130,6 +131,7 @@ async def schedule_posts():
                         if (current_time.hour == time_spec["hour"] and 
                             current_time.minute == time_spec["minute"] and 
                             current_time.weekday() in SCHEDULE_CONFIG["days_of_week"]):
+                            logger.info("Найдено время для публикации по расписанию")
                             await publish_scheduled_post()
                 else:
                     # Проверяем интервалы
@@ -146,19 +148,27 @@ async def schedule_posts():
                         microsecond=0
                     )
                     
+                    logger.info(f"Время начала: {start_time.strftime('%H:%M:%S')}")
+                    logger.info(f"Время окончания: {end_time.strftime('%H:%M:%S')}")
+                    
                     if (start_time <= current_time <= end_time and 
                         current_time.weekday() in SCHEDULE_CONFIG["days_of_week"]):
                         # Проверяем, прошло ли нужное количество минут с начала дня
                         minutes_since_start = (current_time - start_time).total_seconds() / 60
-                        if minutes_since_start % SCHEDULE_CONFIG["interval_minutes"] == 0:
+                        logger.info(f"Прошло минут с начала: {minutes_since_start}")
+                        
+                        # Проверяем, находится ли текущее время в пределах 1 минуты от времени публикации
+                        interval = SCHEDULE_CONFIG["interval_minutes"]
+                        if abs(minutes_since_start % interval) < 1:
+                            logger.info("Найдено время для публикации по интервалу")
                             await publish_scheduled_post()
             
-            # Ждем 1 минуту перед следующей проверкой
-            await asyncio.sleep(60)
+            # Ждем 30 секунд перед следующей проверкой
+            await asyncio.sleep(30)
             
         except Exception as e:
             logger.error(f"Ошибка в планировщике: {str(e)}")
-            await asyncio.sleep(60)
+            await asyncio.sleep(30)
 
 async def publish_scheduled_post():
     """Публикует пост по расписанию."""
