@@ -9,6 +9,9 @@ from aiogram.exceptions import TelegramNetworkError
 from config import BOT_TOKEN, CHANNEL_ID, TIMEZONE, DEEPSEEK_API_KEY
 from deepseek_client import DeepSeekClient
 from schedule_config import SCHEDULE_CONFIG
+from prompt_template import DEEPSEEK_PROMPT, POST_FORMATS, POST_ENDINGS
+import random
+import re
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
@@ -41,6 +44,43 @@ tz = pytz.timezone(TIMEZONE)
 # Инициализация клиента DeepSeek
 deepseek_client = DeepSeekClient()
 
+def escape_markdown(text):
+    """Экранирует все специальные символы MarkdownV2."""
+    # Экранируем все специальные символы
+    escape_chars = r'_*[]()~`>#+-=|{}.!'
+    text = re.sub(f'([{re.escape(escape_chars)}])', r'\\\1', text)
+    return text
+
+def format_post(text):
+    """Добавляет форматирование HTML к посту."""
+    # Разбиваем текст на строки
+    lines = text.split('\n')
+    formatted_lines = []
+    
+    for line in lines:
+        # Если строка начинается с эмодзи и содержит заголовок
+        if line.strip() and any(emoji in line for emoji in ['🧐', '🤔', '💡', '🎯', '✨']):
+            # Выделяем заголовок жирным
+            formatted_line = f"<b>{line.strip()}</b>"
+        # Если строка содержит список (начинается с ✅ или ❌)
+        elif line.strip().startswith(('✅', '❌')):
+            # Оставляем как есть
+            formatted_line = line
+        # Если строка содержит вывод или заключение
+        elif line.strip().startswith(('Вывод:', 'Заключение:')):
+            # Выделяем жирным
+            formatted_line = f"<b>{line.strip()}</b>"
+        # Если строка содержит важные термины или ключевые моменты
+        elif line.strip().startswith(('*', '_')):
+            # Выделяем курсивом
+            formatted_line = f"<i>{line.strip().strip('*_')}</i>"
+        else:
+            formatted_line = line
+        
+        formatted_lines.append(formatted_line)
+    
+    return '\n'.join(formatted_lines)
+
 @dp.message(Command("start"))
 async def cmd_start(message: Message):
     user_info = f"user_id={message.from_user.id}, username=@{message.from_user.username}"
@@ -51,6 +91,8 @@ async def cmd_start(message: Message):
         "Доступные команды:\n"
         "/publish_now - Немедленно сгенерировать и опубликовать пост\n"
         "/publish_theme [тема] - Сгенерировать и опубликовать пост на указанную тему\n"
+        "/debug_prompt [тема] - Показать сгенерированный промпт без публикации\n"
+        "/debug_post [тема] - Показать промпт и сгенерированный пост без публикации\n"
         "/schedule_status - Просмотр статуса автоматических публикаций"
     )
 
@@ -77,8 +119,15 @@ async def cmd_publish_now(message: Message):
         # Публикуем сгенерированный пост напрямую в канал
         await status_msg.edit_text(f"Отправляю пост в канал {CHANNEL_ID}...")
         
-        # Отправляем в канал
-        await bot.send_message(CHANNEL_ID, post_text)
+        # Добавляем форматирование HTML
+        formatted_text = format_post(post_text)
+        
+        # Отправляем в канал с HTML форматированием
+        await bot.send_message(
+            CHANNEL_ID, 
+            formatted_text,
+            parse_mode="HTML"
+        )
         
         # Сообщаем об успешной отправке
         await status_msg.edit_text(
@@ -130,8 +179,15 @@ async def cmd_publish_theme(message: Message):
         # Публикуем сгенерированный пост напрямую в канал
         await status_msg.edit_text(f"Отправляю пост в канал {CHANNEL_ID}...")
         
-        # Отправляем в канал
-        await bot.send_message(CHANNEL_ID, post_text)
+        # Добавляем форматирование HTML
+        formatted_text = format_post(post_text)
+        
+        # Отправляем в канал с HTML форматированием
+        await bot.send_message(
+            CHANNEL_ID, 
+            formatted_text,
+            parse_mode="HTML"
+        )
         
         # Сообщаем об успешной отправке
         await status_msg.edit_text(
@@ -148,6 +204,121 @@ async def cmd_publish_theme(message: Message):
         await status_msg.edit_text(
             f"⚠️ Ошибка при публикации поста: {str(e)}\n"
             f"Пожалуйста, проверьте настройки и права бота в канале."
+        )
+
+@dp.message(Command("debug_prompt"))
+async def cmd_debug_prompt(message: Message):
+    """Показывает сгенерированный промпт без публикации поста."""
+    user_info = f"user_id={message.from_user.id}, username=@{message.from_user.username}"
+    logger.info(f"Запущена отладка промпта по команде от пользователя: {user_info}")
+    
+    # Получаем тему из аргументов команды
+    theme = message.text.split(maxsplit=1)[1] if len(message.text.split()) > 1 else None
+    
+    if not theme:
+        await message.answer(
+            "Пожалуйста, укажите тему для промпта после команды.\n"
+            "Пример: /debug_prompt психическое благополучие"
+        )
+        return
+    
+    try:
+        # Генерируем промпт с указанной темой
+        format_type = random.choice(POST_FORMATS)
+        ending = random.choice(POST_ENDINGS)
+        
+        # Формируем промпт
+        prompt = DEEPSEEK_PROMPT.format(
+            theme=theme,
+            format=format_type,
+            ending=ending
+        )
+        
+        # Отправляем промпт в чат
+        await message.answer(
+            f"🔍 Сгенерированный промпт для темы '{theme}':\n\n"
+            f"Формат: {format_type}\n"
+            f"Завершение: {ending}\n\n"
+            f"Промпт:\n{prompt}"
+        )
+        
+        logger.info(f"Промпт успешно сгенерирован для темы '{theme}'")
+        
+    except Exception as e:
+        error_msg = f"Произошла ошибка при генерации промпта: {str(e)}"
+        logger.error(error_msg)
+        await message.answer(
+            f"⚠️ Ошибка при генерации промпта: {str(e)}"
+        )
+
+@dp.message(Command("debug_post"))
+async def cmd_debug_post(message: Message):
+    """Показывает промпт и сгенерированный пост без публикации."""
+    user_info = f"user_id={message.from_user.id}, username=@{message.from_user.username}"
+    logger.info(f"Запущена отладка поста по команде от пользователя: {user_info}")
+    
+    # Получаем тему из аргументов команды
+    theme = message.text.split(maxsplit=1)[1] if len(message.text.split()) > 1 else None
+    
+    if not theme:
+        await message.answer(
+            "Пожалуйста, укажите тему для поста после команды.\n"
+            "Пример: /debug_post когнитивные искажения"
+        )
+        return
+    
+    # Отправляем сообщение о начале генерации
+    status_msg = await message.answer(f"Генерирую пост на тему '{theme}'... Это может занять несколько секунд.")
+    
+    try:
+        # Генерируем промпт с указанной темой
+        format_type = random.choice(POST_FORMATS)
+        ending = random.choice(POST_ENDINGS)
+        
+        # Формируем промпт
+        prompt = DEEPSEEK_PROMPT.format(
+            theme=theme,
+            format=format_type,
+            ending=ending
+        )
+        
+        # Отправляем промпт в чат
+        await status_msg.edit_text(
+            f"🔍 Сгенерированный промпт для темы '{theme}':\n\n"
+            f"Формат: {format_type}\n"
+            f"Завершение: {ending}\n\n"
+            f"Промпт:\n{prompt}\n\n"
+            f"Генерирую пост..."
+        )
+        
+        # Генерируем пост с помощью DeepSeek
+        post_text = await deepseek_client.generate_post(theme=theme)
+        
+        if not post_text:
+            await status_msg.edit_text(
+                "Не удалось сгенерировать пост. Пожалуйста, проверьте настройки API DeepSeek "
+                "или попробуйте позже."
+            )
+            return
+        
+        # Добавляем форматирование HTML
+        formatted_text = format_post(post_text)
+        
+        # Отправляем результат в чат с HTML форматированием
+        await message.answer(
+            f"✅ Сгенерированный пост:\n\n"
+            f"{formatted_text}\n\n"
+            f"Длина поста: {len(post_text)} символов",
+            parse_mode="HTML"
+        )
+        
+        logger.info(f"Пост успешно сгенерирован для темы '{theme}'")
+        
+    except Exception as e:
+        error_msg = f"Произошла ошибка при генерации поста: {str(e)}"
+        logger.error(error_msg)
+        await status_msg.edit_text(
+            f"⚠️ Ошибка при генерации поста: {str(e)}"
         )
 
 @dp.message(Command("schedule_status"))
@@ -258,8 +429,15 @@ async def publish_scheduled_post():
             post_text = await deepseek_client.generate_post()
             
             if post_text:
-                # Публикуем в канал
-                await bot.send_message(CHANNEL_ID, post_text)
+                # Добавляем форматирование HTML
+                formatted_text = format_post(post_text)
+                
+                # Публикуем в канал с HTML форматированием
+                await bot.send_message(
+                    CHANNEL_ID, 
+                    formatted_text,
+                    parse_mode="HTML"
+                )
                 logger.info("Пост успешно опубликован по расписанию")
                 return
             else:
