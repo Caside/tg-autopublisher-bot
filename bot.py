@@ -50,6 +50,7 @@ async def cmd_start(message: Message):
         "Привет! Я бот для автоматической публикации постов.\n\n"
         "Доступные команды:\n"
         "/publish_now - Немедленно сгенерировать и опубликовать пост\n"
+        "/publish_theme [тема] - Сгенерировать и опубликовать пост на указанную тему\n"
         "/schedule_status - Просмотр статуса автоматических публикаций"
     )
 
@@ -87,6 +88,59 @@ async def cmd_publish_now(message: Message):
         )
         
         logger.info(f"Пост успешно опубликован в канале пользователем {user_info}")
+        
+    except Exception as e:
+        error_msg = f"Произошла ошибка при публикации поста: {str(e)}"
+        logger.error(error_msg)
+        await status_msg.edit_text(
+            f"⚠️ Ошибка при публикации поста: {str(e)}\n"
+            f"Пожалуйста, проверьте настройки и права бота в канале."
+        )
+
+@dp.message(Command("publish_theme"))
+async def cmd_publish_theme(message: Message):
+    """Генерирует и публикует пост на указанную тему."""
+    user_info = f"user_id={message.from_user.id}, username=@{message.from_user.username}"
+    logger.info(f"Запущена публикация поста с темой по команде от пользователя: {user_info}")
+    
+    # Получаем тему из аргументов команды
+    theme = message.text.split(maxsplit=1)[1] if len(message.text.split()) > 1 else None
+    
+    if not theme:
+        await message.answer(
+            "Пожалуйста, укажите тему для поста после команды.\n"
+            "Пример: /publish_theme психическое благополучие"
+        )
+        return
+    
+    # Отправляем сообщение о начале генерации
+    status_msg = await message.answer(f"Генерирую и публикую пост на тему '{theme}' в канал... Это может занять несколько секунд.")
+    
+    try:
+        # Генерируем новый пост с указанной темой
+        post_text = await deepseek_client.generate_post(theme=theme)
+        
+        if not post_text:
+            await status_msg.edit_text(
+                "Не удалось сгенерировать пост. Пожалуйста, проверьте настройки API DeepSeek "
+                "или попробуйте позже."
+            )
+            return
+        
+        # Публикуем сгенерированный пост напрямую в канал
+        await status_msg.edit_text(f"Отправляю пост в канал {CHANNEL_ID}...")
+        
+        # Отправляем в канал
+        await bot.send_message(CHANNEL_ID, post_text)
+        
+        # Сообщаем об успешной отправке
+        await status_msg.edit_text(
+            f"✅ Пост на тему '{theme}' успешно опубликован в канале {CHANNEL_ID}!\n\n"
+            f"Предварительный просмотр:\n\n"
+            f"{post_text[:200]}{'...' if len(post_text) > 200 else ''}"
+        )
+        
+        logger.info(f"Пост на тему '{theme}' успешно опубликован в канале пользователем {user_info}")
         
     except Exception as e:
         error_msg = f"Произошла ошибка при публикации поста: {str(e)}"
