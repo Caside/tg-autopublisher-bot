@@ -26,11 +26,11 @@ class DeepSeekClient:
             logger.error("DeepSeek API ключ не настроен. Пожалуйста, добавьте его в .env файл.")
             raise ValueError("DeepSeek API ключ не настроен")
     
-    async def generate_post(self):
+    async def generate_post(self, theme=None):
         """Генерирует пост, используя DeepSeek API."""
         try:
             # Выбираем случайные параметры для поста
-            theme = random.choice(POST_THEMES)
+            theme = theme or random.choice(POST_THEMES)
             format_type = random.choice(POST_FORMATS)
             ending = random.choice(POST_ENDINGS)
             
