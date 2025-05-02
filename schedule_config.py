@@ -11,11 +11,11 @@ SCHEDULE_CONFIG = {
     "days_of_week": [0, 1, 2, 3, 4, 5, 6],
     
     # Интервал между публикациями в минутах
-    "interval_minutes": 180,
+    "interval_minutes": 240,
     
     # Время начала публикаций (часы, минуты)
     "start_time": {
-        "hour": 12,  # 12:00
+        "hour": 12,  # 13:00
         "minute": 0
     },
     
