@@ -208,64 +208,23 @@ async def cmd_publish_theme(message: Message):
         )
 
 @dp.message(Command("debug_prompt"))
-async def cmd_debug_prompt(message: Message):
-    """Показывает сгенерированный мета-промпт и финальный промпт без публикации поста."""
-    user_info = f"user_id={message.from_user.id}, username=@{message.from_user.username}"
-    logger.info(f"Запущена отладка промпта по команде от пользователя: {user_info}")
-    
-    # Получаем тему из аргументов команды
-    theme = message.text.split(maxsplit=1)[1] if len(message.text.split()) > 1 else None
-    
-    status_msg = await message.answer(
-        f"Генерирую мета-промпт{f' для темы «{theme}»' if theme else ''}... Это может занять несколько секунд."
-    )
-    
+async def debug_prompt(message: Message):
+    """Отладочная команда для проверки генерации промпта."""
     try:
-        # Генерируем мета-промпт
-        meta_prompt, meta_response, final_prompt = await deepseek_client.generate_meta_prompt(theme)
+        logger.info(f"Запущена отладка промпта по команде от пользователя: user_id={message.from_user.id}, username=@{message.from_user.username}")
         
-        # Красиво форматируем JSON для отображения
-        try:
-            json_data = json.loads(meta_response)
-            formatted_json = json.dumps(json_data, ensure_ascii=False, indent=2)
-        except:
-            formatted_json = meta_response
+        # Получаем только JSON-ответ от API
+        meta_response = await deepseek_client.generate_meta_prompt()
         
-        # Отправляем результаты в чат
-        result_message = (
-            f"🔍 Мета-промпт:\n```\n{meta_prompt}\n```\n\n"
-            f"🔧 Ответ API:\n```json\n{formatted_json}\n```\n\n"
-        )
+        # Отправляем ответ
+        await message.answer(f"🔧 Ответ API:\n{meta_response}")
         
-        # Разбиваем сообщение на части, если оно слишком длинное
-        if len(result_message) > 4000:
-            await status_msg.edit_text("Результаты генерации мета-промпта:")
-            
-            # Отправляем мета-промпт
-            await message.answer(f"🔍 Мета-промпт:\n```\n{meta_prompt}\n```")
-            
-            # Отправляем ответ API
-            await message.answer(f"🔧 Ответ API:\n```json\n{formatted_json}\n```")
-            
-            # Отправляем финальный промпт, если он есть
-            if final_prompt:
-                await message.answer(f"📝 Финальный промпт:\n```\n{final_prompt}\n```")
-        else:
-            # Добавляем финальный промпт, если он есть и сообщение не слишком длинное
-            if final_prompt:
-                result_message += f"📝 Финальный промпт:\n```\n{final_prompt}\n```"
-                
-            await status_msg.edit_text(result_message)
-        
-        logger.info(f"Промпт успешно сгенерирован для пользователя {user_info}")
+        logger.info(f"Промпт успешно сгенерирован в режиме отладки для пользователя user_id={message.from_user.id}, username=@{message.from_user.username}")
         
     except Exception as e:
-        error_msg = f"Произошла ошибка при генерации промпта: {str(e)}"
-        logger.error(error_msg)
-        await status_msg.edit_text(
-            f"⚠️ Ошибка при генерации промпта: {str(e)}\n"
-            f"Пожалуйста, проверьте настройки API DeepSeek."
-        )
+        error_message = f"⚠️ Ошибка при генерации промпта: {str(e)}"
+        logger.error(f"{error_message} для пользователя user_id={message.from_user.id}, username=@{message.from_user.username}")
+        await message.answer(error_message)
 
 @dp.message(Command("debug_post"))
 async def cmd_debug_post(message: Message):
