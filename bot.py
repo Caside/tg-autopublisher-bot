@@ -212,42 +212,32 @@ async def cmd_debug_prompt(message: Message):
     user_info = f"user_id={message.from_user.id}, username=@{message.from_user.username}"
     logger.info(f"Запущена отладка промпта по команде от пользователя: {user_info}")
     
-    # Получаем тему из аргументов команды
+    # Получаем тему из аргументов команды (если указана)
     theme = message.text.split(maxsplit=1)[1] if len(message.text.split()) > 1 else None
     
-    if not theme:
-        await message.answer(
-            "Пожалуйста, укажите тему для промпта после команды.\n"
-            "Пример: /debug_prompt психическое благополучие"
-        )
-        return
+    # Отправляем сообщение о начале генерации
+    status_msg = await message.answer("Генерирую промпт...")
     
     try:
-        # Генерируем промпт с указанной темой
-        format_type = random.choice(POST_FORMATS)
-        ending = random.choice(POST_ENDINGS)
-        
-        # Формируем промпт
-        prompt = DEEPSEEK_PROMPT.format(
-            theme=theme,
-            format=format_type,
-            ending=ending
-        )
+        # Генерируем промпт
+        prompt, selected_theme, selected_format, selected_ending, random_seed = deepseek_client.generate_prompt(theme)
         
         # Отправляем промпт в чат
-        await message.answer(
-            f"🔍 Сгенерированный промпт для темы '{theme}':\n\n"
-            f"Формат: {format_type}\n"
-            f"Завершение: {ending}\n\n"
+        await status_msg.edit_text(
+            f"🔍 Сгенерированный промпт:\n\n"
+            f"Тема: {selected_theme}\n"
+            f"Формат: {selected_format}\n"
+            f"Завершение: {selected_ending}\n"
+            f"Случайное число: {random_seed}\n\n"
             f"Промпт:\n{prompt}"
         )
         
-        logger.info(f"Промпт успешно сгенерирован для темы '{theme}'")
+        logger.info(f"Промпт успешно сгенерирован")
         
     except Exception as e:
         error_msg = f"Произошла ошибка при генерации промпта: {str(e)}"
         logger.error(error_msg)
-        await message.answer(
+        await status_msg.edit_text(
             f"⚠️ Ошибка при генерации промпта: {str(e)}"
         )
 
@@ -257,42 +247,15 @@ async def cmd_debug_post(message: Message):
     user_info = f"user_id={message.from_user.id}, username=@{message.from_user.username}"
     logger.info(f"Запущена отладка поста по команде от пользователя: {user_info}")
     
-    # Получаем тему из аргументов команды
+    # Получаем тему из аргументов команды (если указана)
     theme = message.text.split(maxsplit=1)[1] if len(message.text.split()) > 1 else None
     
-    if not theme:
-        await message.answer(
-            "Пожалуйста, укажите тему для поста после команды.\n"
-            "Пример: /debug_post когнитивные искажения"
-        )
-        return
-    
     # Отправляем сообщение о начале генерации
-    status_msg = await message.answer(f"Генерирую пост на тему '{theme}'... Это может занять несколько секунд.")
+    status_msg = await message.answer("Генерирую пост... Это может занять несколько секунд.")
     
     try:
-        # Генерируем промпт с указанной темой
-        format_type = random.choice(POST_FORMATS)
-        ending = random.choice(POST_ENDINGS)
-        
-        # Формируем промпт
-        prompt = DEEPSEEK_PROMPT.format(
-            theme=theme,
-            format=format_type,
-            ending=ending
-        )
-        
-        # Отправляем промпт в чат
-        await status_msg.edit_text(
-            f"🔍 Сгенерированный промпт для темы '{theme}':\n\n"
-            f"Формат: {format_type}\n"
-            f"Завершение: {ending}\n\n"
-            f"Промпт:\n{prompt}\n\n"
-            f"Генерирую пост..."
-        )
-        
         # Генерируем пост с помощью DeepSeek
-        post_text = await deepseek_client.generate_post(theme=theme)
+        post_text, prompt, selected_theme, selected_format, selected_ending, random_seed = await deepseek_client.generate_post(theme)
         
         if not post_text:
             await status_msg.edit_text(
@@ -307,12 +270,17 @@ async def cmd_debug_post(message: Message):
         # Отправляем результат в чат с HTML форматированием
         await message.answer(
             f"✅ Сгенерированный пост:\n\n"
-            f"{formatted_text}\n\n"
+            f"Тема: {selected_theme}\n"
+            f"Формат: {selected_format}\n"
+            f"Завершение: {selected_ending}\n"
+            f"Случайное число: {random_seed}\n\n"
+            f"Промпт:\n{prompt}\n\n"
+            f"Результат:\n{formatted_text}\n\n"
             f"Длина поста: {len(post_text)} символов",
             parse_mode="HTML"
         )
         
-        logger.info(f"Пост успешно сгенерирован для темы '{theme}'")
+        logger.info(f"Пост успешно сгенерирован")
         
     except Exception as e:
         error_msg = f"Произошла ошибка при генерации поста: {str(e)}"
