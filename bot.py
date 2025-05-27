@@ -12,7 +12,6 @@ from schedule_config import SCHEDULE_CONFIG
 from prompt_template import DEEPSEEK_PROMPT, POST_FORMATS, POST_ENDINGS
 import random
 import re
-import json
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
@@ -107,8 +106,8 @@ async def cmd_publish_now(message: Message):
     status_msg = await message.answer("Генерирую и публикую пост в канал... Это может занять несколько секунд.")
     
     try:
-        # Генерируем новый пост с использованием метагенерации
-        post_text = await deepseek_client.generate_post(use_meta_generation=True)
+        # Генерируем новый пост
+        post_text = await deepseek_client.generate_post()
         
         if not post_text:
             await status_msg.edit_text(
@@ -167,8 +166,8 @@ async def cmd_publish_theme(message: Message):
     status_msg = await message.answer(f"Генерирую и публикую пост на тему '{theme}' в канал... Это может занять несколько секунд.")
     
     try:
-        # Генерируем новый пост с указанной темой с использованием метагенерации
-        post_text = await deepseek_client.generate_post(theme=theme, use_meta_generation=True)
+        # Генерируем новый пост с указанной темой
+        post_text = await deepseek_client.generate_post(theme=theme)
         
         if not post_text:
             await status_msg.edit_text(
@@ -209,92 +208,91 @@ async def cmd_publish_theme(message: Message):
 
 @dp.message(Command("debug_prompt"))
 async def cmd_debug_prompt(message: Message):
-    """Показывает сгенерированный мета-промпт и финальный промпт без публикации поста."""
+    """Показывает сгенерированный промпт без публикации поста."""
     user_info = f"user_id={message.from_user.id}, username=@{message.from_user.username}"
     logger.info(f"Запущена отладка промпта по команде от пользователя: {user_info}")
     
     # Получаем тему из аргументов команды
     theme = message.text.split(maxsplit=1)[1] if len(message.text.split()) > 1 else None
     
-    status_msg = await message.answer(
-        f"Генерирую мета-промпт{f' для темы «{theme}»' if theme else ''}... Это может занять несколько секунд."
-    )
+    if not theme:
+        await message.answer(
+            "Пожалуйста, укажите тему для промпта после команды.\n"
+            "Пример: /debug_prompt психическое благополучие"
+        )
+        return
     
     try:
-        # Генерируем мета-промпт
-        meta_prompt, meta_response, final_prompt = await deepseek_client.generate_meta_prompt(theme)
+        # Генерируем промпт с указанной темой
+        format_type = random.choice(POST_FORMATS)
+        ending = random.choice(POST_ENDINGS)
         
-        # Красиво форматируем JSON для отображения
-        try:
-            json_data = json.loads(meta_response)
-            formatted_json = json.dumps(json_data, ensure_ascii=False, indent=2)
-        except:
-            formatted_json = meta_response
-        
-        # Отправляем результаты в чат
-        result_message = (
-            f"🔍 Мета-промпт:\n```\n{meta_prompt}\n```\n\n"
-            f"🔧 Ответ API:\n```json\n{formatted_json}\n```\n\n"
+        # Формируем промпт
+        prompt = DEEPSEEK_PROMPT.format(
+            theme=theme,
+            format=format_type,
+            ending=ending
         )
         
-        # Разбиваем сообщение на части, если оно слишком длинное
-        if len(result_message) > 4000:
-            await status_msg.edit_text("Результаты генерации мета-промпта:")
-            
-            # Отправляем мета-промпт
-            await message.answer(f"🔍 Мета-промпт:\n```\n{meta_prompt}\n```")
-            
-            # Отправляем ответ API
-            await message.answer(f"🔧 Ответ API:\n```json\n{formatted_json}\n```")
-            
-            # Отправляем финальный промпт, если он есть
-            if final_prompt:
-                await message.answer(f"📝 Финальный промпт:\n```\n{final_prompt}\n```")
-        else:
-            # Добавляем финальный промпт, если он есть и сообщение не слишком длинное
-            if final_prompt:
-                result_message += f"📝 Финальный промпт:\n```\n{final_prompt}\n```"
-                
-            await status_msg.edit_text(result_message)
+        # Отправляем промпт в чат
+        await message.answer(
+            f"🔍 Сгенерированный промпт для темы '{theme}':\n\n"
+            f"Формат: {format_type}\n"
+            f"Завершение: {ending}\n\n"
+            f"Промпт:\n{prompt}"
+        )
         
-        logger.info(f"Промпт успешно сгенерирован для пользователя {user_info}")
+        logger.info(f"Промпт успешно сгенерирован для темы '{theme}'")
         
     except Exception as e:
         error_msg = f"Произошла ошибка при генерации промпта: {str(e)}"
         logger.error(error_msg)
-        await status_msg.edit_text(
-            f"⚠️ Ошибка при генерации промпта: {str(e)}\n"
-            f"Пожалуйста, проверьте настройки API DeepSeek."
+        await message.answer(
+            f"⚠️ Ошибка при генерации промпта: {str(e)}"
         )
 
 @dp.message(Command("debug_post"))
 async def cmd_debug_post(message: Message):
-    """Показывает сгенерированный мета-промпт, финальный промпт и пост без публикации."""
+    """Показывает промпт и сгенерированный пост без публикации."""
     user_info = f"user_id={message.from_user.id}, username=@{message.from_user.username}"
     logger.info(f"Запущена отладка поста по команде от пользователя: {user_info}")
     
     # Получаем тему из аргументов команды
     theme = message.text.split(maxsplit=1)[1] if len(message.text.split()) > 1 else None
     
-    status_msg = await message.answer(
-        f"Генерирую мета-промпт и пост{f' для темы «{theme}»' if theme else ''}... Это может занять несколько секунд."
-    )
+    if not theme:
+        await message.answer(
+            "Пожалуйста, укажите тему для поста после команды.\n"
+            "Пример: /debug_post когнитивные искажения"
+        )
+        return
+    
+    # Отправляем сообщение о начале генерации
+    status_msg = await message.answer(f"Генерирую пост на тему '{theme}'... Это может занять несколько секунд.")
     
     try:
-        # Генерируем мета-промпт
-        meta_prompt, meta_response, final_prompt = await deepseek_client.generate_meta_prompt(theme)
+        # Генерируем промпт с указанной темой
+        format_type = random.choice(POST_FORMATS)
+        ending = random.choice(POST_ENDINGS)
         
-        # Красиво форматируем JSON для отображения
-        try:
-            # Очищаем ответ от возможных блоков кода
-            cleaned_response = deepseek_client._clean_json_response(meta_response)
-            json_data = json.loads(cleaned_response)
-            formatted_json = json.dumps(json_data, ensure_ascii=False, indent=2)
-        except:
-            formatted_json = meta_response
+        # Формируем промпт
+        prompt = DEEPSEEK_PROMPT.format(
+            theme=theme,
+            format=format_type,
+            ending=ending
+        )
         
-        # Генерируем пост с использованием метагенерации
-        post_text = await deepseek_client.generate_post(theme=theme, use_meta_generation=True)
+        # Отправляем промпт в чат
+        await status_msg.edit_text(
+            f"🔍 Сгенерированный промпт для темы '{theme}':\n\n"
+            f"Формат: {format_type}\n"
+            f"Завершение: {ending}\n\n"
+            f"Промпт:\n{prompt}\n\n"
+            f"Генерирую пост..."
+        )
+        
+        # Генерируем пост с помощью DeepSeek
+        post_text = await deepseek_client.generate_post(theme=theme)
         
         if not post_text:
             await status_msg.edit_text(
@@ -303,37 +301,24 @@ async def cmd_debug_post(message: Message):
             )
             return
         
-        # Отправляем мета-промпт
-        await status_msg.edit_text("Результаты генерации:")
-        await message.answer(f"🔍 Мета-промпт:\n```\n{meta_prompt}\n```")
-        
-        # Отправляем ответ API
-        await message.answer(f"🔧 Ответ API:\n```json\n{formatted_json}\n```")
-        
-        # Отправляем финальный промпт, если он есть
-        if final_prompt:
-            await message.answer(f"📝 Финальный промпт:\n```\n{final_prompt}\n```")
-        
-        # Форматируем пост для HTML
+        # Добавляем форматирование HTML
         formatted_text = format_post(post_text)
         
-        # Отправляем сгенерированный пост
-        await message.answer(f"📊 Сгенерированный пост:\n\n{post_text}")
-        
-        # Отправляем пост с HTML-форматированием
+        # Отправляем результат в чат с HTML форматированием
         await message.answer(
-            f"📊 С HTML-форматированием:\n\n{formatted_text}",
+            f"✅ Сгенерированный пост:\n\n"
+            f"{formatted_text}\n\n"
+            f"Длина поста: {len(post_text)} символов",
             parse_mode="HTML"
         )
         
-        logger.info(f"Пост успешно сгенерирован в режиме отладки для пользователя {user_info}")
+        logger.info(f"Пост успешно сгенерирован для темы '{theme}'")
         
     except Exception as e:
         error_msg = f"Произошла ошибка при генерации поста: {str(e)}"
         logger.error(error_msg)
         await status_msg.edit_text(
-            f"⚠️ Ошибка при генерации поста: {str(e)}\n"
-            f"Пожалуйста, проверьте настройки API DeepSeek."
+            f"⚠️ Ошибка при генерации поста: {str(e)}"
         )
 
 @dp.message(Command("schedule_status"))
@@ -432,38 +417,45 @@ async def schedule_posts():
             await asyncio.sleep(30)
 
 async def publish_scheduled_post():
-    """Публикует запланированный пост в канал."""
-    global last_publication_time
+    """Публикует пост по расписанию."""
+    max_retries = 3
+    retry_delay = 5  # секунды
     
-    logger.info(f"Публикация запланированного поста...")
-    
-    try:
-        # Генерируем новый пост с использованием метагенерации
-        post_text = await deepseek_client.generate_post(use_meta_generation=True)
-        
-        if not post_text:
-            logger.error("Не удалось сгенерировать пост для запланированной публикации")
+    for attempt in range(max_retries):
+        try:
+            logger.info("Генерация и публикация поста по расписанию")
+            
+            # Генерируем новый пост
+            post_text = await deepseek_client.generate_post()
+            
+            if post_text:
+                # Добавляем форматирование HTML
+                formatted_text = format_post(post_text)
+                
+                # Публикуем в канал с HTML форматированием
+                await bot.send_message(
+                    CHANNEL_ID, 
+                    formatted_text,
+                    parse_mode="HTML"
+                )
+                logger.info("Пост успешно опубликован по расписанию")
+                return
+            else:
+                logger.error("Не удалось сгенерировать пост для публикации по расписанию")
+                return
+                
+        except TelegramNetworkError as e:
+            logger.error(f"Ошибка сети при публикации поста по расписанию (попытка {attempt + 1}/{max_retries}): {str(e)}")
+            if attempt < max_retries - 1:
+                await asyncio.sleep(retry_delay)
+                continue
+            else:
+                logger.error("Превышено максимальное количество попыток публикации поста")
+                return
+                
+        except Exception as e:
+            logger.error(f"Ошибка при публикации поста по расписанию: {str(e)}")
             return
-        
-        # Добавляем форматирование HTML
-        formatted_text = format_post(post_text)
-        
-        # Отправляем в канал с HTML форматированием
-        await bot.send_message(
-            CHANNEL_ID, 
-            formatted_text,
-            parse_mode="HTML"
-        )
-        
-        # Обновляем время последней публикации
-        last_publication_time = datetime.now(tz)
-        
-        logger.info(f"Запланированный пост успешно опубликован в канале {CHANNEL_ID}")
-        
-    except TelegramNetworkError as e:
-        logger.error(f"Ошибка сети Telegram при публикации запланированного поста: {str(e)}")
-    except Exception as e:
-        logger.error(f"Ошибка при публикации запланированного поста: {str(e)}")
 
 async def main():
     logger.info(f"Бот запущен. Часовой пояс: {TIMEZONE}")
