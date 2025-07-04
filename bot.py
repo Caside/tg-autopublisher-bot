@@ -10,6 +10,14 @@ from config import BOT_TOKEN, CHANNEL_ID, TIMEZONE, DEEPSEEK_API_KEY
 from deepseek_client import DeepSeekClient
 from schedule_config import SCHEDULE_CONFIG
 from prompt_template import DEEPSEEK_PROMPT, POST_FORMATS, POST_ENDINGS
+from mode_config import (
+    get_current_mode_config, 
+    get_available_modes, 
+    get_mode_info, 
+    set_mode,
+    PostMode
+)
+from philosophers import get_philosopher_names, PHILOSOPHERS
 import random
 import re
 
@@ -321,6 +329,162 @@ async def cmd_schedule_status(message: Message):
     
     await message.answer(status_message)
 
+@dp.message(Command("mode_info"))
+async def cmd_mode_info(message: Message):
+    """Показывает информацию о текущем режиме работы."""
+    user_info = f"user_id={message.from_user.id}, username=@{message.from_user.username}"
+    logger.debug(f"Получена команда /mode_info от пользователя: {user_info}")
+    
+    current_mode = get_mode_info()
+    
+    mode_text = (
+        f"🎭 <b>Текущий режим работы:</b>\n\n"
+        f"<b>{current_mode['name']}</b>\n"
+        f"{current_mode['description']}\n\n"
+        f"Режим: <code>{current_mode['mode']}</code>\n\n"
+        f"Доступные режимы:\n"
+    )
+    
+    for mode in get_available_modes():
+        info = get_mode_info(mode)
+        status = "✅" if info['is_current'] else "⚪"
+        mode_text += f"{status} {info['name']} (<code>{mode}</code>)\n"
+    
+    mode_text += f"\nИспользуйте /set_mode [режим] для переключения"
+    
+    await message.answer(mode_text, parse_mode="HTML")
+
+@dp.message(Command("set_mode"))
+async def cmd_set_mode(message: Message):
+    """Переключает режим работы бота."""
+    user_info = f"user_id={message.from_user.id}, username=@{message.from_user.username}"
+    logger.info(f"Получена команда /set_mode от пользователя: {user_info}")
+    
+    # Получаем режим из аргументов команды
+    args = message.text.split(maxsplit=1)
+    if len(args) < 2:
+        await message.answer(
+            "Укажите режим работы:\n"
+            "• <code>classic</code> - классические посты\n"
+            "• <code>dialogue</code> - диалоги мыслителей\n"
+            "• <code>mixed</code> - смешанный режим\n\n"
+            "Пример: /set_mode dialogue",
+            parse_mode="HTML"
+        )
+        return
+    
+    new_mode = args[1].lower()
+    
+    if set_mode(new_mode):
+        mode_info = get_mode_info(new_mode)
+        await message.answer(
+            f"✅ Режим успешно изменен!\n\n"
+            f"<b>{mode_info['name']}</b>\n"
+            f"{mode_info['description']}",
+            parse_mode="HTML"
+        )
+        logger.info(f"Режим изменен на {new_mode} пользователем {user_info}")
+    else:
+        await message.answer(
+            f"❌ Неизвестный режим: {new_mode}\n\n"
+            "Доступные режимы: classic, dialogue, mixed"
+        )
+
+@dp.message(Command("test_dialogue"))
+async def cmd_test_dialogue(message: Message):
+    """Тестирует создание диалога между мыслителями."""
+    user_info = f"user_id={message.from_user.id}, username=@{message.from_user.username}"
+    logger.info(f"Запущен тест диалога по команде от пользователя: {user_info}")
+    
+    # Получаем тему из аргументов команды
+    theme = message.text.split(maxsplit=1)[1] if len(message.text.split()) > 1 else None
+    
+    status_msg = await message.answer("Создаю тестовый диалог... Это может занять несколько секунд.")
+    
+    try:
+        # Временно переключаемся в режим диалогов для теста
+        from mode_config import CURRENT_MODE
+        old_mode = CURRENT_MODE
+        set_mode(PostMode.DIALOGUE)
+        
+        # Генерируем диалог
+        post_text, prompt, selected_theme, selected_format, selected_ending, random_seed = await deepseek_client.generate_post(theme)
+        
+        # Восстанавливаем старый режим
+        set_mode(old_mode)
+        
+        if post_text:
+            await status_msg.edit_text(
+                f"✅ <b>Тестовый диалог создан:</b>\n\n"
+                f"Тема: {selected_theme}\n"
+                f"Формат: {selected_format}\n\n"
+                f"<b>Результат:</b>\n{post_text}\n\n"
+                f"Длина: {len(post_text)} символов",
+                parse_mode="HTML"
+            )
+        else:
+            await status_msg.edit_text("❌ Не удалось создать тестовый диалог")
+        
+    except Exception as e:
+        await status_msg.edit_text(f"❌ Ошибка при создании диалога: {str(e)}")
+
+@dp.message(Command("philosophers"))
+async def cmd_philosophers(message: Message):
+    """Показывает список доступных мыслителей."""
+    user_info = f"user_id={message.from_user.id}, username=@{message.from_user.username}"
+    logger.debug(f"Получена команда /philosophers от пользователя: {user_info}")
+    
+    philosophers_text = "🧠 <b>Доступные мыслители:</b>\n\n"
+    
+    for key in get_philosopher_names():
+        philosopher = PHILOSOPHERS[key]
+        emoji = {
+            'stoic': '🏛️',
+            'existentialist': '🌊', 
+            'zen_master': '🍃',
+            'cynic': '⚡',
+            'mystic': '✨'
+        }.get(key, '🧠')
+        
+        philosophers_text += f"{emoji} <b>{philosopher['name']}</b>\n"
+        philosophers_text += f"<i>Школа:</i> {philosopher['school']}\n"
+        philosophers_text += f"<i>Подход:</i> {philosopher['approach']}\n\n"
+    
+    philosophers_text += "Используйте /test_dialogue [тема] для создания диалога"
+    
+    await message.answer(philosophers_text, parse_mode="HTML")
+
+@dp.message(Command("dialogue_stats"))
+async def cmd_dialogue_stats(message: Message):
+    """Показывает статистику диалогов."""
+    user_info = f"user_id={message.from_user.id}, username=@{message.from_user.username}"
+    logger.debug(f"Получена команда /dialogue_stats от пользователя: {user_info}")
+    
+    try:
+        dialogue_system = deepseek_client.get_dialogue_system()
+        stats = dialogue_system.get_dialogue_stats()
+        
+        stats_text = f"📊 <b>Статистика диалогов:</b>\n\n"
+        stats_text += f"Всего диалогов: {stats['total']}\n\n"
+        
+        if stats['recent_themes']:
+            stats_text += f"<b>Недавние темы:</b>\n"
+            for theme in stats['recent_themes'][-5:]:
+                stats_text += f"• {theme}\n"
+            stats_text += "\n"
+        
+        if stats['active_philosophers']:
+            stats_text += f"<b>Активность мыслителей:</b>\n"
+            for philosopher, count in stats['active_philosophers'].items():
+                name = PHILOSOPHERS[philosopher]['name']
+                emoji = dialogue_system.get_speaker_emoji(philosopher)
+                stats_text += f"{emoji} {name}: {count} диалогов\n"
+        
+        await message.answer(stats_text, parse_mode="HTML")
+        
+    except Exception as e:
+        await message.answer(f"❌ Ошибка при получении статистики: {str(e)}")
+
 @dp.message(Command("help"))
 async def cmd_help(message: Message):
     """Показывает список всех доступных команд."""
@@ -329,14 +493,27 @@ async def cmd_help(message: Message):
     
     help_text = (
         "🤖 <b>Список доступных команд:</b>\n\n"
+        "<b>Основные:</b>\n"
         "/start - Начать работу с ботом\n"
         "/help - Показать это сообщение\n"
         "/publish_now - Немедленно сгенерировать и опубликовать пост\n"
         "/publish_theme [тема] - Сгенерировать и опубликовать пост на указанную тему\n"
-        "/debug_prompt [тема] - Показать сгенерированный промпт без публикации\n"
-        "/debug_post [тема] - Показать промпт и сгенерированный пост без публикации\n"
         "/schedule_status - Просмотр статуса автоматических публикаций\n\n"
-        "<i>Примечание: параметр [тема] является необязательным для команд debug_prompt и debug_post.</i>"
+        
+        "<b>Режимы работы:</b>\n"
+        "/mode_info - Информация о текущем режиме\n"
+        "/set_mode [режим] - Переключить режим (classic/dialogue/mixed)\n\n"
+        
+        "<b>Тестирование диалогов:</b>\n"
+        "/test_dialogue [тема] - Создать тестовый диалог\n"
+        "/philosophers - Список мыслителей\n"
+        "/dialogue_stats - Статистика диалогов\n\n"
+        
+        "<b>Отладка:</b>\n"
+        "/debug_prompt [тема] - Показать сгенерированный промпт\n"
+        "/debug_post [тема] - Показать промпт и пост\n\n"
+        
+        "<i>Примечание: параметр [тема] является необязательным.</i>"
     )
     
     await message.answer(help_text, parse_mode="HTML")
