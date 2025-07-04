@@ -101,17 +101,11 @@ class DialogueSystem:
         philosopher_names = [PHILOSOPHERS[p]['name'] for p in philosophers]
         dialogue_format = random.choice(self.dialogue_formats)
         
-        opening_prompt = f"""Создай краткую вводную часть (2-3 предложения) для философского диалога между {philosopher_names[0]} и {philosopher_names[1]} на тему "{theme}".
+        opening_prompt = f"""Создай очень краткое введение (1-2 предложения, максимум 50 слов) для диалога между {philosopher_names[0]} и {philosopher_names[1]} на тему "{theme}".
 
-Формат диалога: {dialogue_format}
+Формат: {dialogue_format}
 
-Введение должно:
-- Задать контекст и атмосферу
-- Представить суть проблемы
-- Подготовить читателя к столкновению мировоззрений
-- Быть интригующим и лаконичным
-
-Пиши от третьего лица, как ведущий дискуссии."""
+Введение должно быть лаконичным и интригующим, задать контекст одной фразой."""
         
         try:
             headers = {
@@ -122,7 +116,7 @@ class DialogueSystem:
             payload = {
                 "model": "deepseek-chat",
                 "messages": [{"role": "user", "content": opening_prompt}],
-                "max_tokens": 200,
+                "max_tokens": 80,
                 "temperature": 0.8
             }
             
@@ -162,7 +156,7 @@ class DialogueSystem:
             payload = {
                 "model": "deepseek-chat",
                 "messages": [{"role": "user", "content": prompt}],
-                "max_tokens": 250,
+                "max_tokens": 120,
                 "temperature": 0.9,
                 "top_p": 0.95
             }
@@ -204,19 +198,14 @@ class DialogueSystem:
             context_for_second = f"{PHILOSOPHERS[philosophers[0]]['name']}: {first_response}"
             second_response = await self.generate_philosopher_response(philosophers[1], theme, context_for_second)
             
-            # Генерируем заключительную реплику первого мыслителя
-            full_context = f"{PHILOSOPHERS[philosophers[0]]['name']}: {first_response}\n\n{PHILOSOPHERS[philosophers[1]]['name']}: {second_response}"
-            final_response = await self.generate_philosopher_response(philosophers[0], theme, full_context)
-            
-            # Формируем итоговый диалог
+            # Формируем итоговый диалог (только 2 реплики для краткости)
             dialogue = {
                 'theme': theme,
                 'participants': philosophers,
                 'opening': opening,
                 'exchanges': [
                     {'speaker': philosophers[0], 'text': first_response},
-                    {'speaker': philosophers[1], 'text': second_response},
-                    {'speaker': philosophers[0], 'text': final_response}
+                    {'speaker': philosophers[1], 'text': second_response}
                 ],
                 'summary': f"{first_response[:50]}... → {second_response[:50]}..."
             }
