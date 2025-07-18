@@ -8,11 +8,12 @@ import os
 # Режимы работы бота
 class PostMode:
     CLASSIC = "classic"        # Старый режим с одиночными постами
-    DIALOGUE = "dialogue"      # Новый режим с диалогами мыслителей
+    DIALOGUE = "dialogue"      # Режим с диалогами мыслителей (в одном посте)
+    THREADS = "threads"        # Режим с цепочками диалогов (отдельные посты)
     MIXED = "mixed"           # Смешанный режим (50/50)
 
 # Текущий режим (можно переопределить через переменную окружения)
-CURRENT_MODE = os.getenv('POST_MODE', PostMode.DIALOGUE)
+CURRENT_MODE = os.getenv('POST_MODE', PostMode.THREADS)
 
 # Настройки для каждого режима
 MODE_CONFIG = {
@@ -30,6 +31,14 @@ MODE_CONFIG = {
         "dialogue_probability": 1.0
     },
     
+    PostMode.THREADS: {
+        "name": "Цепочки диалогов",
+        "description": "Последовательные посты-ответы между мыслителями во времени",
+        "use_threads": True,
+        "use_dialogues": False,
+        "dialogue_probability": 0.0
+    },
+    
     PostMode.MIXED: {
         "name": "Смешанный режим",
         "description": "50% диалоги, 50% классические посты",
@@ -45,7 +54,7 @@ def get_current_mode_config():
 def is_dialogue_mode():
     """Проверяет, включен ли режим диалогов."""
     config = get_current_mode_config()
-    if not config['use_dialogues']:
+    if not config.get('use_dialogues', False):
         return False
     
     if config['dialogue_probability'] == 1.0:
@@ -56,6 +65,11 @@ def is_dialogue_mode():
         # Смешанный режим - случайный выбор
         import random
         return random.random() < config['dialogue_probability']
+
+def is_threads_mode():
+    """Проверяет, включен ли режим цепочек диалогов."""
+    config = get_current_mode_config()
+    return config.get('use_threads', False)
 
 def set_mode(mode: str):
     """Устанавливает режим работы (для тестирования)."""

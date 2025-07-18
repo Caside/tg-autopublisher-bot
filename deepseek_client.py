@@ -18,7 +18,7 @@ from prompt_template import (
     POST_ENDINGS,
     generate_random_seed
 )
-from mode_config import is_dialogue_mode, get_current_mode_config
+from mode_config import is_dialogue_mode, is_threads_mode, get_current_mode_config
 
 # Настройка логирования
 logger = logging.getLogger('deepseek_client')
@@ -40,6 +40,9 @@ class DeepSeekClient:
         
         # Система диалогов (инициализируется позже, чтобы избежать циклического импорта)
         self._dialogue_system = None
+        
+        # Система цепочек диалогов
+        self._thread_system = None
         
         if not self.api_key or self.api_key == "your_deepseek_api_key_here":
             logger.error("DeepSeek API ключ не настроен. Пожалуйста, добавьте его в .env файл.")
@@ -65,6 +68,13 @@ class DeepSeekClient:
             from dialogue_system import DialogueSystem
             self._dialogue_system = DialogueSystem(self)
         return self._dialogue_system
+    
+    def get_thread_system(self):
+        """Получает или создает систему цепочек диалогов."""
+        if self._thread_system is None:
+            from thread_system import ThreadSystem
+            self._thread_system = ThreadSystem(self)
+        return self._thread_system
     
     def generate_prompt(self, theme=None):
         """Генерирует промпт с случайными параметрами."""
@@ -94,17 +104,19 @@ class DeepSeekClient:
         return prompt, selected_theme, selected_format, selected_ending, random_seed
     
     async def generate_post(self, theme=None):
-        """Генерирует пост, используя DeepSeek API. Поддерживает классические посты и диалоги."""
+        """Генерирует пост, используя DeepSeek API. Поддерживает все режимы работы."""
         try:
             # Проверяем, какой режим активен
-            if is_dialogue_mode():
+            if is_threads_mode():
+                return await self._generate_thread_post(theme)
+            elif is_dialogue_mode():
                 return await self._generate_dialogue_post(theme)
             else:
                 return await self._generate_classic_post(theme)
                 
         except Exception as e:
             logger.error(f"Ошибка при генерации поста: {str(e)}")
-            return None, None, None, None, None, None
+            return None, None, None, None, None, None, None
     
     async def _generate_classic_post(self, theme=None):
         """Генерирует классический пост."""
@@ -135,14 +147,14 @@ class DeepSeekClient:
                 result = response.json()
                 post_text = result["choices"][0]["message"]["content"].strip()
                 logger.info("Классический пост успешно сгенерирован")
-                return post_text, prompt, selected_theme, selected_format, selected_ending, random_seed
+                return post_text, prompt, selected_theme, selected_format, selected_ending, random_seed, None
             else:
                 logger.error(f"Ошибка API: {response.status_code} - {response.text}")
-                return None, None, None, None, None, None
+                return None, None, None, None, None, None, None
                 
         except Exception as e:
             logger.error(f"Ошибка при генерации классического поста: {str(e)}")
-            return None, None, None, None, None, None
+            return None, None, None, None, None, None, None
     
     async def _generate_dialogue_post(self, theme=None):
         """Генерирует пост в формате диалога мыслителей."""
@@ -161,11 +173,49 @@ class DeepSeekClient:
                 random_seed = random.randint(1000, 9999)
                 
                 logger.info(f"Диалог успешно сгенерирован между {dialogue['participants']}")
-                return post_text, prompt, selected_theme, selected_format, selected_ending, random_seed
+                return post_text, prompt, selected_theme, selected_format, selected_ending, random_seed, None
             else:
                 logger.error("Не удалось создать диалог")
-                return None, None, None, None, None, None
+                return None, None, None, None, None, None, None
                 
         except Exception as e:
             logger.error(f"Ошибка при генерации диалога: {str(e)}")
-            return None, None, None, None, None, None
+            return None, None, None, None, None, None, None
+    
+    async def _generate_thread_post(self, theme=None):
+        """Генерирует пост в режиме цепочек диалогов."""
+        try:
+            thread_system = self.get_thread_system()
+            thread_post = await thread_system.generate_next_post(theme)
+            
+            if thread_post:
+                post_text = thread_post['formatted_content']
+                
+                # Формируем информацию для совместимости с классическим форматом
+                prompt = f"Цепочка диалогов ({thread_post['type']}): {thread_post['philosopher']} на тему {thread_post['theme']}"
+                selected_theme = thread_post['theme']
+                selected_format = f"цепочка диалогов ({thread_post['type']})"
+                selected_ending = f"пост #{thread_post.get('post_number', 1)} в цепочке"
+                random_seed = random.randint(1000, 9999)
+                
+                logger.info(f"Пост цепочки успешно сгенерирован: {thread_post['type']} от {thread_post['philosopher']}")
+                
+                # Добавляем информацию о реплае
+                reply_info = {
+                    'thread_id': thread_post['thread_id'],
+                    'reply_to_message_id': thread_post.get('reply_to_message_id')
+                }
+                
+                return post_text, prompt, selected_theme, selected_format, selected_ending, random_seed, reply_info
+            else:
+                logger.error("Не удалось создать пост цепочки")
+                return None, None, None, None, None, None, None
+                
+        except Exception as e:
+            logger.error(f"Ошибка при генерации поста цепочки: {str(e)}")
+            return None, None, None, None, None, None, None
+    
+    def update_thread_message_id(self, thread_id: str, message_id: int):
+        """Обновляет message_id последнего поста в цепочке."""
+        if self._thread_system:
+            self._thread_system.update_message_id(thread_id, message_id)
