@@ -254,24 +254,46 @@ async def cmd_debug_post(message: Message):
     
     # Отправляем сообщение о начале генерации
     status_msg = await message.answer("Генерирую пост... Это может занять несколько секунд.")
+    logger.info(f"DEBUG: Начальное сообщение отправлено")
     
     try:
+        logger.info(f"DEBUG: Начинаем генерацию поста")
         # Генерируем пост с помощью DeepSeek
         result = await deepseek_client.generate_post()
+        logger.info(f"DEBUG: Пост сгенерирован, результат: {type(result)}, длина: {len(result) if result else 'None'}")
+        
         if len(result) == 5:
             post_text, prompt, selected_format, selected_ending, reply_info = result
+            logger.info(f"DEBUG: Распаковали результат в 5 переменных")
         else:
             # Обратная совместимость со старым форматом
             post_text, prompt, selected_format, selected_ending = result[:4]
             reply_info = None
+            logger.info(f"DEBUG: Распаковали результат в 4 переменные (старый формат)")
+        
+        logger.info(f"DEBUG: Длина сгенерированного поста: {len(post_text) if post_text else 'None'}")
+        logger.info(f"DEBUG: Длина промпта: {len(prompt) if prompt else 'None'}")
+        
+        if post_text:
+            logger.info(f"DEBUG: Первые 200 символов поста: {post_text[:200]}")
+            logger.info(f"DEBUG: Последние 100 символов поста: {post_text[-100:]}")
+            
+            # Проверяем HTML теги в посте
+            import re
+            open_tags = re.findall(r'<[^/][^>]*>', post_text)
+            close_tags = re.findall(r'</[^>]*>', post_text)
+            logger.info(f"DEBUG: Открывающие теги в посте: {open_tags}")
+            logger.info(f"DEBUG: Закрывающие теги в посте: {close_tags}")
         
         if not post_text:
+            logger.info(f"DEBUG: Пост пустой, отправляем сообщение об ошибке")
             await status_msg.edit_text(
                 "Не удалось сгенерировать пост. Пожалуйста, проверьте настройки API DeepSeek "
                 "или попробуйте позже."
             )
             return
         
+        logger.info(f"DEBUG: Начинаем обработку ключевых слов")
         # Получаем ключевые слова из промпта или генерируем новые для отображения
         try:
             # Пытаемся извлечь ключевые слова из промпта
@@ -283,30 +305,48 @@ async def cmd_debug_post(message: Message):
                 # Если не найдены в промпте, генерируем новые для отображения
                 keywords_list = deepseek_client._get_random_keywords()
                 keywords_string = ", ".join(keywords_list) if keywords_list else "не удалось определить"
-        except:
+        except Exception as e:
             keywords_string = "не удалось определить"
+            logger.error(f"DEBUG: Ошибка при извлечении ключевых слов: {e}")
         
-        # Добавляем форматирование HTML
-        formatted_text = format_post(post_text)
+        logger.info(f"DEBUG: Ключевые слова: {keywords_string}")
+        
+        # Экранируем HTML в промпте для безопасного отображения
+        import html
+        escaped_prompt = html.escape(prompt)
+        logger.info(f"DEBUG: Промпт экранирован, длина: {len(escaped_prompt)}")
+        
+        # Пробуем также экранировать HTML в посте для тестирования
+        escaped_post = html.escape(post_text)
+        logger.info(f"DEBUG: Пост экранирован, длина: {len(escaped_post)}")
+        logger.info(f"DEBUG: Первые 200 символов экранированного поста: {escaped_post[:200]}")
+        
+        # Используем экранированный пост для отладки
+        formatted_text = escaped_post
+        
+        total_length = len(escaped_prompt) + len(formatted_text) + 300
+        logger.info(f"DEBUG: Готовимся отправить сообщение примерной длиной {total_length} символов")
         
         # Отправляем результат в чат с HTML форматированием
+        logger.info(f"DEBUG: Отправляем финальное сообщение...")
         await message.answer(
             f"✅ <b>Сгенерированный пост:</b>\n\n"
             f"<b>Параметры генерации:</b>\n"
             f"• Формат: {selected_format}\n"
             f"• Завершение: {selected_ending}\n"
             f"• Ключевые слова: {keywords_string}\n\n"
-            f"<b>Промпт:</b>\n<code>{prompt}</code>\n\n"
-            f"<b>Результат:</b>\n{formatted_text}\n\n"
+            f"<b>Промпт:</b>\n<code>{escaped_prompt}</code>\n\n"
+            f"<b>Результат (экранированный):</b>\n<code>{formatted_text}</code>\n\n"
             f"📊 Длина поста: {len(post_text)} символов",
             parse_mode="HTML"
         )
         
-        logger.info(f"Пост успешно сгенерирован с debug информацией")
+        logger.info(f"DEBUG: Сообщение отправлено успешно")
         
     except Exception as e:
         error_msg = f"Произошла ошибка при генерации поста: {str(e)}"
         logger.error(error_msg)
+        logger.error(f"DEBUG: Полная ошибка: {repr(e)}")
         await status_msg.edit_text(
             f"⚠️ Ошибка при генерации поста: {str(e)}"
         )
