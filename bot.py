@@ -15,10 +15,8 @@ from mode_config import (
     get_available_modes, 
     get_mode_info, 
     set_mode,
-    PostMode,
-    is_threads_mode
+    PostMode
 )
-from philosophers import get_philosopher_names, PHILOSOPHERS
 import random
 import re
 
@@ -134,22 +132,12 @@ async def cmd_publish_now(message: Message):
         # Добавляем форматирование HTML
         formatted_text = format_post(post_text)
         
-        # Отправляем в канал с HTML форматированием (с реплаем если это цепочка)
-        send_params = {
-            "chat_id": CHANNEL_ID,
-            "text": formatted_text,
-            "parse_mode": "HTML"
-        }
-        
-        # Добавляем реплай если это пост в цепочке
-        if reply_info and reply_info.get('reply_to_message_id'):
-            send_params["reply_to_message_id"] = reply_info['reply_to_message_id']
-        
-        sent_message = await bot.send_message(**send_params)
-        
-        # Обновляем message_id в цепочке если это цепочка диалогов
-        if reply_info and reply_info.get('thread_id'):
-            deepseek_client.update_thread_message_id(reply_info['thread_id'], sent_message.message_id)
+        # Отправляем в канал с HTML форматированием
+        sent_message = await bot.send_message(
+            chat_id=CHANNEL_ID,
+            text=formatted_text,
+            parse_mode="HTML"
+        )
         
         # Сообщаем об успешной отправке
         await status_msg.edit_text(
@@ -210,22 +198,12 @@ async def cmd_publish_theme(message: Message):
         # Добавляем форматирование HTML
         formatted_text = format_post(post_text)
         
-        # Отправляем в канал с HTML форматированием (с реплаем если это цепочка)
-        send_params = {
-            "chat_id": CHANNEL_ID,
-            "text": formatted_text,
-            "parse_mode": "HTML"
-        }
-        
-        # Добавляем реплай если это пост в цепочке
-        if reply_info and reply_info.get('reply_to_message_id'):
-            send_params["reply_to_message_id"] = reply_info['reply_to_message_id']
-        
-        sent_message = await bot.send_message(**send_params)
-        
-        # Обновляем message_id в цепочке если это цепочка диалогов
-        if reply_info and reply_info.get('thread_id'):
-            deepseek_client.update_thread_message_id(reply_info['thread_id'], sent_message.message_id)
+        # Отправляем в канал с HTML форматированием
+        sent_message = await bot.send_message(
+            chat_id=CHANNEL_ID,
+            text=formatted_text,
+            parse_mode="HTML"
+        )
         
         # Сообщаем об успешной отправке
         await status_msg.edit_text(
@@ -380,16 +358,8 @@ async def cmd_mode_info(message: Message):
         f"🎭 <b>Текущий режим работы:</b>\n\n"
         f"<b>{current_mode['name']}</b>\n"
         f"{current_mode['description']}\n\n"
-        f"Режим: <code>{current_mode['mode']}</code>\n\n"
-        f"Доступные режимы:\n"
+        f"Режим: <code>{current_mode['mode']}</code>"
     )
-    
-    for mode in get_available_modes():
-        info = get_mode_info(mode)
-        status = "✅" if info['is_current'] else "⚪"
-        mode_text += f"{status} {info['name']} (<code>{mode}</code>)\n"
-    
-    mode_text += f"\nИспользуйте /set_mode [режим] для переключения"
     
     await message.answer(mode_text, parse_mode="HTML")
 
@@ -404,11 +374,8 @@ async def cmd_set_mode(message: Message):
     if len(args) < 2:
         await message.answer(
             "Укажите режим работы:\n"
-            "• <code>classic</code> - классические посты\n"
-            "• <code>dialogue</code> - диалоги мыслителей (в одном посте)\n"
-            "• <code>threads</code> - цепочки диалогов (отдельные посты)\n"
-            "• <code>mixed</code> - смешанный режим\n\n"
-            "Пример: /set_mode threads",
+            "• <code>classic</code> - классические посты\n\n"
+            "Пример: /set_mode classic",
             parse_mode="HTML"
         )
         return
@@ -418,202 +385,17 @@ async def cmd_set_mode(message: Message):
     if set_mode(new_mode):
         mode_info = get_mode_info(new_mode)
         await message.answer(
-            f"✅ Режим успешно изменен!\n\n"
+            f"✅ Режим успешно подтвержден!\n\n"
             f"<b>{mode_info['name']}</b>\n"
             f"{mode_info['description']}",
             parse_mode="HTML"
         )
-        logger.info(f"Режим изменен на {new_mode} пользователем {user_info}")
+        logger.info(f"Режим подтвержден как {new_mode} пользователем {user_info}")
     else:
         await message.answer(
             f"❌ Неизвестный режим: {new_mode}\n\n"
-            "Доступные режимы: classic, dialogue, threads, mixed"
+            "Доступный режим: classic"
         )
-
-@dp.message(Command("test_dialogue"))
-async def cmd_test_dialogue(message: Message):
-    """Тестирует создание диалога между мыслителями."""
-    user_info = f"user_id={message.from_user.id}, username=@{message.from_user.username}"
-    logger.info(f"Запущен тест диалога по команде от пользователя: {user_info}")
-    
-    # Получаем тему из аргументов команды
-    theme = message.text.split(maxsplit=1)[1] if len(message.text.split()) > 1 else None
-    
-    status_msg = await message.answer("Создаю тестовый диалог... Это может занять несколько секунд.")
-    
-    try:
-        # Временно переключаемся в режим диалогов для теста
-        from mode_config import CURRENT_MODE
-        old_mode = CURRENT_MODE
-        set_mode(PostMode.DIALOGUE)
-        
-        # Генерируем диалог
-        result = await deepseek_client.generate_post(theme)
-        if len(result) == 7:
-            post_text, prompt, selected_theme, selected_format, selected_ending, random_seed, reply_info = result
-        else:
-            # Обратная совместимость со старым форматом
-            post_text, prompt, selected_theme, selected_format, selected_ending, random_seed = result
-            reply_info = None
-        
-        # Восстанавливаем старый режим
-        set_mode(old_mode)
-        
-        if post_text:
-            await status_msg.edit_text(
-                f"✅ <b>Тестовый диалог создан:</b>\n\n"
-                f"Тема: {selected_theme}\n"
-                f"Формат: {selected_format}\n\n"
-                f"<b>Результат:</b>\n{post_text}\n\n"
-                f"Длина: {len(post_text)} символов",
-                parse_mode="HTML"
-            )
-        else:
-            await status_msg.edit_text("❌ Не удалось создать тестовый диалог")
-        
-    except Exception as e:
-        await status_msg.edit_text(f"❌ Ошибка при создании диалога: {str(e)}")
-
-@dp.message(Command("philosophers"))
-async def cmd_philosophers(message: Message):
-    """Показывает список доступных мыслителей."""
-    user_info = f"user_id={message.from_user.id}, username=@{message.from_user.username}"
-    logger.debug(f"Получена команда /philosophers от пользователя: {user_info}")
-    
-    philosophers_text = "🧠 <b>Доступные мыслители:</b>\n\n"
-    
-    for key in get_philosopher_names():
-        philosopher = PHILOSOPHERS[key]
-        emoji = {
-            'stoic': '🏛️',
-            'existentialist': '🌊', 
-            'zen_master': '🍃',
-            'cynic': '⚡',
-            'mystic': '✨'
-        }.get(key, '🧠')
-        
-        philosophers_text += f"{emoji} <b>{philosopher['name']}</b>\n"
-        philosophers_text += f"<i>Школа:</i> {philosopher['school']}\n"
-        philosophers_text += f"<i>Подход:</i> {philosopher['approach']}\n\n"
-    
-    philosophers_text += "Используйте /test_dialogue [тема] для создания диалога"
-    
-    await message.answer(philosophers_text, parse_mode="HTML")
-
-@dp.message(Command("dialogue_stats"))
-async def cmd_dialogue_stats(message: Message):
-    """Показывает статистику диалогов."""
-    user_info = f"user_id={message.from_user.id}, username=@{message.from_user.username}"
-    logger.debug(f"Получена команда /dialogue_stats от пользователя: {user_info}")
-    
-    try:
-        dialogue_system = deepseek_client.get_dialogue_system()
-        stats = dialogue_system.get_dialogue_stats()
-        
-        stats_text = f"📊 <b>Статистика диалогов:</b>\n\n"
-        stats_text += f"Всего диалогов: {stats['total']}\n\n"
-        
-        if stats['recent_themes']:
-            stats_text += f"<b>Недавние темы:</b>\n"
-            for theme in stats['recent_themes'][-5:]:
-                stats_text += f"• {theme}\n"
-            stats_text += "\n"
-        
-        if stats['active_philosophers']:
-            stats_text += f"<b>Активность мыслителей:</b>\n"
-            for philosopher, count in stats['active_philosophers'].items():
-                name = PHILOSOPHERS[philosopher]['name']
-                emoji = dialogue_system.get_speaker_emoji(philosopher)
-                stats_text += f"{emoji} {name}: {count} диалогов\n"
-        
-        await message.answer(stats_text, parse_mode="HTML")
-        
-    except Exception as e:
-        await message.answer(f"❌ Ошибка при получении статистики: {str(e)}")
-
-@dp.message(Command("test_thread"))
-async def cmd_test_thread(message: Message):
-    """Тестирует создание поста в режиме цепочек диалогов."""
-    user_info = f"user_id={message.from_user.id}, username=@{message.from_user.username}"
-    logger.info(f"Запущен тест цепочки по команде от пользователя: {user_info}")
-    
-    # Получаем тему из аргументов команды
-    theme = message.text.split(maxsplit=1)[1] if len(message.text.split()) > 1 else None
-    
-    status_msg = await message.answer("Создаю пост в режиме цепочек... Это может занять несколько секунд.")
-    
-    try:
-        # Временно переключаемся в режим цепочек для теста
-        from mode_config import CURRENT_MODE
-        old_mode = CURRENT_MODE
-        set_mode(PostMode.THREADS)
-        
-        # Генерируем пост цепочки
-        result = await deepseek_client.generate_post(theme)
-        if len(result) == 7:
-            post_text, prompt, selected_theme, selected_format, selected_ending, random_seed, reply_info = result
-        else:
-            # Обратная совместимость со старым форматом
-            post_text, prompt, selected_theme, selected_format, selected_ending, random_seed = result
-            reply_info = None
-        
-        # Восстанавливаем старый режим
-        set_mode(old_mode)
-        
-        if post_text:
-            await status_msg.edit_text(
-                f"✅ <b>Пост цепочки создан:</b>\n\n"
-                f"Тема: {selected_theme}\n"
-                f"Формат: {selected_format}\n"
-                f"Тип: {selected_ending}\n\n"
-                f"<b>Результат:</b>\n{post_text}\n\n"
-                f"Длина: {len(post_text)} символов",
-                parse_mode="HTML"
-            )
-        else:
-            await status_msg.edit_text("❌ Не удалось создать пост цепочки")
-        
-    except Exception as e:
-        await status_msg.edit_text(f"❌ Ошибка при создании поста цепочки: {str(e)}")
-
-@dp.message(Command("thread_stats"))
-async def cmd_thread_stats(message: Message):
-    """Показывает статистику цепочек диалогов."""
-    user_info = f"user_id={message.from_user.id}, username=@{message.from_user.username}"
-    logger.debug(f"Получена команда /thread_stats от пользователя: {user_info}")
-    
-    try:
-        thread_system = deepseek_client.get_thread_system()
-        stats = thread_system.get_system_stats()
-        
-        stats_text = f"🧵 <b>Статистика цепочек диалогов:</b>\n\n"
-        stats_text += f"Активных цепочек: {stats['active_threads']}\n"
-        stats_text += f"Всего цепочек: {stats['total_threads']}\n"
-        stats_text += f"Всего постов: {stats['total_posts']}\n\n"
-        
-        if stats['active_themes']:
-            stats_text += f"<b>Активные темы:</b>\n"
-            for theme in stats['active_themes']:
-                stats_text += f"• {theme}\n"
-            stats_text += "\n"
-        
-        if stats['active_participants']:
-            stats_text += f"<b>Участники дискуссий:</b>\n"
-            for participant in stats['active_participants']:
-                name = PHILOSOPHERS[participant]['name']
-                emoji = {
-                    'stoic': '🏛️',
-                    'existentialist': '🌊', 
-                    'zen_master': '🍃',
-                    'cynic': '⚡',
-                    'mystic': '✨'
-                }.get(participant, '🧠')
-                stats_text += f"{emoji} {name}\n"
-        
-        await message.answer(stats_text, parse_mode="HTML")
-        
-    except Exception as e:
-        await message.answer(f"❌ Ошибка при получении статистики цепочек: {str(e)}")
 
 @dp.message(Command("help"))
 async def cmd_help(message: Message):
@@ -630,16 +412,9 @@ async def cmd_help(message: Message):
         "/publish_theme [тема] - Сгенерировать и опубликовать пост на указанную тему\n"
         "/schedule_status - Просмотр статуса автоматических публикаций\n\n"
         
-        "<b>Режимы работы:</b>\n"
+        "<b>Режим работы:</b>\n"
         "/mode_info - Информация о текущем режиме\n"
-        "/set_mode [режим] - Переключить режим (classic/dialogue/threads/mixed)\n\n"
-        
-        "<b>Тестирование диалогов:</b>\n"
-        "/test_dialogue [тема] - Создать тестовый диалог (в одном посте)\n"
-        "/test_thread [тема] - Создать пост в режиме цепочек диалогов\n"
-        "/philosophers - Список мыслителей\n"
-        "/dialogue_stats - Статистика диалогов\n"
-        "/thread_stats - Статистика цепочек диалогов\n\n"
+        "/set_mode classic - Подтвердить классический режим\n\n"
         
         "<b>Отладка:</b>\n"
         "/debug_prompt [тема] - Показать сгенерированный промпт\n"
@@ -732,22 +507,12 @@ async def publish_scheduled_post():
                 # Добавляем форматирование HTML
                 formatted_text = format_post(post_text)
                 
-                # Отправляем в канал с HTML форматированием (с реплаем если это цепочка)
-                send_params = {
-                    "chat_id": CHANNEL_ID,
-                    "text": formatted_text,
-                    "parse_mode": "HTML"
-                }
-                
-                # Добавляем реплай если это пост в цепочке
-                if reply_info and reply_info.get('reply_to_message_id'):
-                    send_params["reply_to_message_id"] = reply_info['reply_to_message_id']
-                
-                sent_message = await bot.send_message(**send_params)
-                
-                # Обновляем message_id в цепочке если это цепочка диалогов
-                if reply_info and reply_info.get('thread_id'):
-                    deepseek_client.update_thread_message_id(reply_info['thread_id'], sent_message.message_id)
+                # Отправляем в канал с HTML форматированием
+                sent_message = await bot.send_message(
+                    chat_id=CHANNEL_ID,
+                    text=formatted_text,
+                    parse_mode="HTML"
+                )
                 
                 logger.info("Пост успешно опубликован по расписанию")
                 return
