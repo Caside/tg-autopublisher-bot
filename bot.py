@@ -9,7 +9,7 @@ from aiogram.exceptions import TelegramNetworkError
 from config import BOT_TOKEN, CHANNEL_ID, TIMEZONE, DEEPSEEK_API_KEY
 from deepseek_client import DeepSeekClient
 from schedule_config import SCHEDULE_CONFIG
-from prompt_template import DEEPSEEK_PROMPT, POST_FORMATS, POST_ENDINGS
+from prompt_template import DEEPSEEK_PROMPT
 from mode_config import (
     get_current_mode_config, 
     get_available_modes, 
@@ -112,12 +112,12 @@ async def cmd_publish_now(message: Message):
     try:
         # Генерируем новый пост
         result = await deepseek_client.generate_post()
-        if len(result) == 5:
-            post_text, prompt, selected_format, selected_ending, reply_info = result
+        if len(result) == 3:
+            post_text, prompt, keywords_list = result
         else:
             # Обратная совместимость со старым форматом
-            post_text, prompt, selected_format, selected_ending = result[:4]
-            reply_info = None
+            post_text, prompt = result[:2]
+            keywords_list = []
         
         if not post_text:
             await status_msg.edit_text(
@@ -168,12 +168,12 @@ async def cmd_publish_custom(message: Message):
     try:
         # Генерируем новый пост
         result = await deepseek_client.generate_post()
-        if len(result) == 5:
-            post_text, prompt, selected_format, selected_ending, reply_info = result
+        if len(result) == 3:
+            post_text, prompt, keywords_list = result
         else:
             # Обратная совместимость со старым форматом
-            post_text, prompt, selected_format, selected_ending = result[:4]
-            reply_info = None
+            post_text, prompt = result[:2]
+            keywords_list = []
         
         if not post_text:
             await status_msg.edit_text(
@@ -223,7 +223,7 @@ async def cmd_debug_prompt(message: Message):
     
     try:
         # Генерируем промпт
-        prompt, selected_format, selected_ending, keywords_list = deepseek_client.generate_prompt()
+        prompt, keywords_list = deepseek_client.generate_prompt()
         
         # Формируем строку с ключевыми словами
         keywords_string = ", ".join(keywords_list) if keywords_list else "не загружены"
@@ -231,8 +231,6 @@ async def cmd_debug_prompt(message: Message):
         # Отправляем промпт в чат
         await status_msg.edit_text(
             f"🔍 Сгенерированный промпт:\n\n"
-            f"Формат: {selected_format}\n"
-            f"Завершение: {selected_ending}\n"
             f"Ключевые слова: {keywords_string}\n\n"
             f"Промпт:\n{prompt}"
         )
@@ -262,14 +260,14 @@ async def cmd_debug_post(message: Message):
         result = await deepseek_client.generate_post()
         logger.info(f"DEBUG: Пост сгенерирован, результат: {type(result)}, длина: {len(result) if result else 'None'}")
         
-        if len(result) == 5:
-            post_text, prompt, selected_format, selected_ending, reply_info = result
-            logger.info(f"DEBUG: Распаковали результат в 5 переменных")
+        if len(result) == 3:
+            post_text, prompt, keywords_list = result
+            logger.info(f"DEBUG: Распаковали результат в 3 переменные")
         else:
             # Обратная совместимость со старым форматом
-            post_text, prompt, selected_format, selected_ending = result[:4]
-            reply_info = None
-            logger.info(f"DEBUG: Распаковали результат в 4 переменные (старый формат)")
+            post_text, prompt = result[:2]
+            keywords_list = []
+            logger.info(f"DEBUG: Распаковали результат в 2 переменные (старый формат)")
         
         logger.info(f"DEBUG: Длина сгенерированного поста: {len(post_text) if post_text else 'None'}")
         logger.info(f"DEBUG: Длина промпта: {len(prompt) if prompt else 'None'}")
@@ -294,21 +292,8 @@ async def cmd_debug_post(message: Message):
             return
         
         logger.info(f"DEBUG: Начинаем обработку ключевых слов")
-        # Получаем ключевые слова из промпта или генерируем новые для отображения
-        try:
-            # Пытаемся извлечь ключевые слова из промпта
-            import re
-            keywords_match = re.search(r'Внутренние мотивы для вдохновения: (.+)', prompt)
-            if keywords_match:
-                keywords_string = keywords_match.group(1)
-            else:
-                # Если не найдены в промпте, генерируем новые для отображения
-                keywords_list = deepseek_client._get_random_keywords()
-                keywords_string = ", ".join(keywords_list) if keywords_list else "не удалось определить"
-        except Exception as e:
-            keywords_string = "не удалось определить"
-            logger.error(f"DEBUG: Ошибка при извлечении ключевых слов: {e}")
-        
+        # Формируем строку с ключевыми словами
+        keywords_string = ", ".join(keywords_list) if keywords_list else "не удалось определить"
         logger.info(f"DEBUG: Ключевые слова: {keywords_string}")
         
         # Экранируем HTML в промпте для безопасного отображения
@@ -332,8 +317,6 @@ async def cmd_debug_post(message: Message):
         await message.answer(
             f"✅ <b>Сгенерированный пост:</b>\n\n"
             f"<b>Параметры генерации:</b>\n"
-            f"• Формат: {selected_format}\n"
-            f"• Завершение: {selected_ending}\n"
             f"• Ключевые слова: {keywords_string}\n\n"
             f"<b>Промпт:</b>\n<code>{escaped_prompt}</code>\n\n"
             f"<b>Результат (экранированный):</b>\n<code>{formatted_text}</code>\n\n"
@@ -563,12 +546,12 @@ async def publish_scheduled_post():
             
             # Генерируем новый пост
             result = await deepseek_client.generate_post()
-            if len(result) == 5:
-                post_text, prompt, selected_format, selected_ending, reply_info = result
+            if len(result) == 3:
+                post_text, prompt, keywords_list = result
             else:
                 # Обратная совместимость со старым форматом
-                post_text, prompt, selected_format, selected_ending = result[:4]
-                reply_info = None
+                post_text, prompt = result[:2]
+                keywords_list = []
             
             if post_text:
                 # Добавляем форматирование HTML
