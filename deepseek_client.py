@@ -3,7 +3,7 @@
 Поддерживает только классические посты с системой случайных ключевых слов.
 """
 
-import requests
+from openai import OpenAI
 import json
 import logging
 import random
@@ -11,8 +11,8 @@ import os
 
 from config import DEEPSEEK_API_KEY
 from prompt_template import (
-    DEEPSEEK_PROMPT, 
-    DEEPSEEK_API_PARAMS, 
+    DEEPSEEK_PROMPT,
+    DEEPSEEK_API_PARAMS,
     DEEPSEEK_API_PARAM_RANGES
 )
 
@@ -22,21 +22,24 @@ logger.setLevel(logging.INFO)
 
 class DeepSeekClient:
     """Клиент для работы с DeepSeek API."""
-    
+
     def __init__(self):
         self.api_key = DEEPSEEK_API_KEY
-        self.api_url = "https://api.deepseek.com/v1/chat/completions"
         self.prompt_template = DEEPSEEK_PROMPT
         self.api_params = DEEPSEEK_API_PARAMS.copy()
-        
 
-        
-        # Загружаем ключевые слова
-        self.keywords = self._load_keywords()
-        
+        # Инициализируем OpenAI клиент для DeepSeek API
         if not self.api_key or self.api_key == "your_deepseek_api_key_here":
             logger.error("DeepSeek API ключ не настроен. Пожалуйста, добавьте его в .env файл.")
             raise ValueError("DeepSeek API ключ не настроен")
+
+        self.client = OpenAI(
+            api_key=self.api_key,
+            base_url="https://api.deepseek.com"
+        )
+
+        # Загружаем ключевые слова
+        self.keywords = self._load_keywords()
     
     def _load_keywords(self):
         """Загружает ключевые слова из JSON файла."""
@@ -96,35 +99,30 @@ class DeepSeekClient:
         try:
             # Генерируем промпт
             prompt, keywords_list = self.generate_prompt()
-            
-            # Подготавливаем запрос с случайными параметрами
-            headers = {
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {self.api_key}"
-            }
-            
-            payload = {
-                "messages": [{"role": "user", "content": prompt}],
-                **self._get_random_api_params()
-            }
-            
-            # Отправляем запрос
-            response = requests.post(
-                self.api_url,
-                headers=headers,
-                json=payload,
-                timeout=120
+
+            # Получаем случайные параметры API
+            api_params = self._get_random_api_params()
+
+            # Отправляем запрос через OpenAI SDK
+            response = self.client.chat.completions.create(
+                model=api_params["model"],
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=api_params["max_tokens"],
+                temperature=api_params.get("temperature", 0.7),
+                top_p=api_params.get("top_p", 0.9),
+                presence_penalty=api_params.get("presence_penalty", 0.5),
+                frequency_penalty=api_params.get("frequency_penalty", 0.6),
+                stream=False
             )
-            
-            if response.status_code == 200:
-                result = response.json()
-                post_text = result["choices"][0]["message"]["content"].strip()
+
+            if response.choices and len(response.choices) > 0:
+                post_text = response.choices[0].message.content.strip()
                 logger.info(f"Классический пост успешно сгенерирован с ключевыми словами: {keywords_list}")
                 return post_text, prompt, keywords_list
             else:
-                logger.error(f"Ошибка API: {response.status_code} - {response.text}")
+                logger.error("API вернул пустой ответ")
                 return None, None, None
-                
+
         except Exception as e:
             logger.error(f"Ошибка при генерации поста: {str(e)}")
             return None, None, None
