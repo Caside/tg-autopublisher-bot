@@ -7,6 +7,9 @@ import logging
 from typing import List
 import random
 
+# Импортируем NewsItem для типизации
+from news_collector import NewsItem
+
 logger = logging.getLogger('context_processor')
 
 
@@ -89,6 +92,111 @@ class ContextProcessor:
             if keyword in headline_lower:
                 return True
         return False
+
+    async def select_top_news_items(self, news_items: List[NewsItem], limit: int = 5) -> List[NewsItem]:
+        """
+        Отбирает топ новости для поста.
+
+        Args:
+            news_items: Список объектов новостей
+            limit: Количество новостей для отбора (по умолчанию 5)
+
+        Returns:
+            Список отобранных объектов новостей
+        """
+        if not news_items:
+            logger.warning("Нет новостей для отбора")
+            return []
+
+        # Фильтруем новости поэтапно
+        military_filtered = 0
+        positive_items = []
+        neutral_items = []
+
+        for item in news_items:
+            headline = item.title.strip()
+
+            # Пропускаем слишком короткие заголовки
+            if len(headline) < 20:
+                continue
+
+            # Пропускаем заголовки с техническими терминами или рекламой
+            skip_words = ['реклама', 'спонсор', 'партнер', 'pr', 'промо']
+            if any(word in headline.lower() for word in skip_words):
+                continue
+
+            # ГЛАВНЫЙ ФИЛЬТР: исключаем военные новости
+            if self._is_military_news(headline):
+                military_filtered += 1
+                logger.debug(f"Отфильтрована военная новость: {headline[:50]}...")
+                continue
+
+            # Разделяем на позитивные и нейтральные
+            if self._has_positive_content(headline):
+                positive_items.append(item)
+            else:
+                neutral_items.append(item)
+
+        # Приоритизация: сначала позитивные, затем нейтральные
+        filtered_items = positive_items + neutral_items
+
+        logger.info(f"Отфильтровано {military_filtered} военных новостей")
+        logger.info(f"Найдено {len(positive_items)} позитивных и {len(neutral_items)} нейтральных новостей")
+
+        # Выбираем новости с приоритетом позитивных и балансировкой источников
+        selected = self._balance_sources_selection(filtered_items, positive_items, neutral_items, limit)
+
+        return selected
+
+    def _balance_sources_selection(self, all_items: List[NewsItem], positive_items: List[NewsItem],
+                                 neutral_items: List[NewsItem], limit: int) -> List[NewsItem]:
+        """Выбирает новости с балансировкой источников."""
+        if len(all_items) <= limit:
+            logger.info(f"Используем все {len(all_items)} доступных новости (после фильтрации военных)")
+            return all_items
+
+        # Максимум 2 новости от одного источника
+        max_per_source = 2
+        selected = []
+        source_count = {}
+
+        # Первый проход: приоритет позитивным новостям
+        remaining_positive = positive_items.copy()
+        remaining_neutral = neutral_items.copy()
+
+        # Балансируем источники для позитивных новостей
+        random.shuffle(remaining_positive)
+        for item in remaining_positive:
+            if len(selected) >= limit:
+                break
+            if source_count.get(item.source, 0) < max_per_source:
+                selected.append(item)
+                source_count[item.source] = source_count.get(item.source, 0) + 1
+
+        # Добираем нейтральными новостями, если места еще есть
+        random.shuffle(remaining_neutral)
+        for item in remaining_neutral:
+            if len(selected) >= limit:
+                break
+            if source_count.get(item.source, 0) < max_per_source:
+                selected.append(item)
+                source_count[item.source] = source_count.get(item.source, 0) + 1
+
+        # Если все еще не набрали limit, берем любые оставшиеся (игнорируя лимит источников)
+        if len(selected) < limit:
+            all_remaining = [item for item in all_items if item not in selected]
+            needed = limit - len(selected)
+            if all_remaining:
+                selected.extend(random.sample(all_remaining, min(needed, len(all_remaining))))
+
+        # Логирование статистики
+        positive_count = len([item for item in selected if item in positive_items])
+        neutral_count = len([item for item in selected if item in neutral_items])
+
+        logger.info(f"Отобрано {len(selected)} новостей: {positive_count} позитивных, {neutral_count} нейтральных")
+        logger.info(f"Распределение по источникам: {dict(source_count)}")
+
+        return selected
 
     async def select_top_headlines(self, headlines: List[str], limit: int = 5) -> List[str]:
         """

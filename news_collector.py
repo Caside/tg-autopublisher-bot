@@ -34,18 +34,27 @@ class NewsCollector:
     """Класс для сбора новостей из различных RSS источников."""
 
     def __init__(self):
-        # Настройка источников новостей с их RSS фидами
+        # Специализированные мирные источники новостей
         self.sources = {
-            'ria': 'https://ria.ru/export/rss2/archive/index.xml',
-            'lenta': 'https://lenta.ru/rss',
-            'rbc': 'https://rssexport.rbc.ru/rbcnews/news/20/full.rss',
-            'vedomosti': 'https://www.vedomosti.ru/rss/news',
-            'habr': 'https://habr.com/ru/rss/all/all/',
-            'nplus1': 'https://nplus1.ru/rss'
+            # Наука и технологии (один основной Habr + научные)
+            'habr_science': 'https://habr.com/ru/rss/hub/popular_science/',
+            'naked_science': 'https://naked-science.ru/feed',
+            'ria_science': 'https://ria.ru/export/rss2/archive/index.xml?rubric=24',
+            'nplus1': 'https://nplus1.ru/rss',
+
+            # Экономика и бизнес (российские источники)
+            'vedomosti_main': 'https://www.vedomosti.ru/rss/news',
+            'rbc_business': 'https://rssexport.rbc.ru/rbcnews/news/30/full.rss',
+            'kommersant_economics': 'https://www.kommersant.ru/RSS/section-economics.xml',
+            'interfax_business': 'https://www.interfax.ru/rss.asp?id=business',
+
+            # IT и технологии (российские)
+            'vc_tech': 'https://vc.ru/rss/all',
+            'cnews': 'https://www.cnews.ru/inc/rss/news.xml'
         }
 
         # Настройка тайм-аутов и ограничений
-        self.timeout = 10
+        self.timeout = 7  # Уменьшенный тайм-аут для быстрой работы
         self.max_items_per_source = 5
         self.max_age_hours = 24
 
@@ -204,3 +213,11 @@ class NewsCollector:
 
         logger.info(f"Возвращено {len(headlines)} заголовков для анализа")
         return headlines
+
+    async def get_recent_news_items(self, limit: int = 20) -> List['NewsItem']:
+        """Получает объекты новостей с заголовками и ссылками."""
+        news_items = await self.collect_news()
+        filtered_items = [item for item in news_items[:limit] if item.title and item.link]
+
+        logger.info(f"Возвращено {len(filtered_items)} новостных объектов для анализа")
+        return filtered_items
