@@ -111,7 +111,7 @@ async def cmd_publish_now(message: Message):
     
     try:
         # Генерируем новый пост
-        result = await deepseek_client.generate_post()
+        result = await deepseek_client.generate_hybrid_post()
         if len(result) == 3:
             post_text, prompt, keywords_list = result
         else:
@@ -167,7 +167,7 @@ async def cmd_publish_custom(message: Message):
     
     try:
         # Генерируем новый пост
-        result = await deepseek_client.generate_post()
+        result = await deepseek_client.generate_hybrid_post()
         if len(result) == 3:
             post_text, prompt, keywords_list = result
         else:
@@ -255,9 +255,9 @@ async def cmd_debug_post(message: Message):
     logger.info(f"DEBUG: Начальное сообщение отправлено")
     
     try:
-        logger.info(f"DEBUG: Начинаем генерацию поста")
-        # Генерируем пост с помощью DeepSeek
-        result = await deepseek_client.generate_post()
+        logger.info(f"DEBUG: Начинаем генерацию поста с принудительным обновлением новостей")
+        # Генерируем пост с помощью DeepSeek с принудительным обновлением кэша
+        result = await deepseek_client.generate_hybrid_post(force_refresh=True)
         logger.info(f"DEBUG: Пост сгенерирован, результат: {type(result)}, длина: {len(result) if result else 'None'}")
         
         if len(result) == 3:
@@ -545,7 +545,7 @@ async def publish_scheduled_post():
             logger.info("Генерация и публикация поста по расписанию")
             
             # Генерируем новый пост
-            result = await deepseek_client.generate_post()
+            result = await deepseek_client.generate_hybrid_post()
             if len(result) == 3:
                 post_text, prompt, keywords_list = result
             else:

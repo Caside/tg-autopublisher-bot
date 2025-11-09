@@ -71,7 +71,7 @@ class DeepSeekClient:
         return params
     
 
-    async def _get_headlines(self) -> List[str]:
+    async def _get_headlines(self, force_refresh: bool = False) -> List[str]:
         """Получает 5 заголовков новостей с кэшированием."""
         if not self.news_enabled or not self.news_collector:
             return [
@@ -83,11 +83,12 @@ class DeepSeekClient:
             ]
 
         try:
-            # Проверяем кэш
+            # Проверяем кэш (если не принудительное обновление)
             now = datetime.now()
             cache_hours = NEWS_CACHE_HOURS if 'NEWS_CACHE_HOURS' in globals() else 1
 
-            if (self._news_cache_time and
+            if (not force_refresh and
+                    self._news_cache_time and
                     self._news_cache and
                     (now - self._news_cache_time).total_seconds() < cache_hours * 3600):
                 logger.debug("Используем кэшированные новости")
@@ -127,6 +128,61 @@ class DeepSeekClient:
                 "Ожидается возобновление работы",
                 "Спасибо за ваше терпение"
             ]
+
+    async def _get_news_items(self, force_refresh: bool = False) -> List:
+        """Получает 5 объектов новостей с кэшированием."""
+        if not self.news_enabled or not self.news_collector:
+            return []
+
+        try:
+            # Проверяем кэш (если не принудительное обновление)
+            now = datetime.now()
+            cache_hours = NEWS_CACHE_HOURS if 'NEWS_CACHE_HOURS' in globals() else 1
+
+            if (not force_refresh and
+                    self._news_cache_time and
+                    self._news_cache and
+                    (now - self._news_cache_time).total_seconds() < cache_hours * 3600):
+                logger.debug("Используем кэшированные новости")
+                return await self.context_processor.select_top_news_items(self._news_cache, limit=5)
+
+            # Собираем свежие новости
+            logger.info("Сбор свежих новостей")
+            news_items = await self.news_collector.get_recent_news_items(limit=20)
+
+            if not news_items:
+                logger.warning("Новости не получены, используем fallback")
+                return []
+
+            # Обновляем кэш
+            self._news_cache = news_items
+            self._news_cache_time = now
+
+            # Используем context_processor для отбора лучших новостей
+            selected_items = await self.context_processor.select_top_news_items(news_items, limit=5)
+
+            logger.info(f"Выбрано {len(selected_items)} новостей из {len(news_items)} доступных")
+            return selected_items
+
+        except Exception as e:
+            logger.error(f"Ошибка при получении новостей: {str(e)}")
+            return []
+
+    def _format_headlines_section(self, news_items: List) -> str:
+        """Форматирует секцию заголовков с ссылками."""
+        headlines_lines = []
+        headlines_lines.append("📰 <b>Новости:</b>")
+
+        for item in news_items:
+            if hasattr(item, 'link') and item.link:
+                # Формат с ссылкой
+                headline_line = f"• <a href=\"{item.link}\">{item.title}</a>"
+            else:
+                # Формат без ссылки (fallback)
+                headline_line = f"• {item.title}"
+            headlines_lines.append(headline_line)
+
+        return "\n".join(headlines_lines)
 
     async def generate_prompt_with_context(self):
         """Генерирует промпт с новостными заголовками."""
@@ -187,4 +243,80 @@ class DeepSeekClient:
 
         except Exception as e:
             logger.error(f"Ошибка при генерации поста: {str(e)}")
+            return None, None, None
+
+    async def generate_hybrid_post(self, force_refresh: bool = False):
+        """Генерирует пост гибридно: заголовки в коде, комментарий через LLM."""
+        try:
+            # Получаем новостные объекты
+            news_items = await self._get_news_items(force_refresh=force_refresh)
+
+            if not news_items:
+                logger.warning("Нет новостей для генерации поста")
+                return None, None, None
+
+            # Форматируем заголовки программно
+            headlines_section = self._format_headlines_section(news_items)
+
+            # Создаем список разнообразных философских вопросов
+            philosophical_questions = [
+                "Какой главный инсайт о человеческой природе?",
+                "Что это говорит о нашем времени?",
+                "Какой парадокс современности здесь проявляется?",
+                "Что объединяет эти события?",
+                "Какую закономерность можно увидеть?",
+                "О чем это говорит в глобальном смысле?",
+                "Какой вывод можно сделать о современном мире?",
+                "Какую тенденцию это отражает?",
+                "Что это показывает о человеческих приоритетах?",
+                "Какой глубинный смысл здесь скрыт?"
+            ]
+
+            # Выбираем случайный вопрос
+            random_question = random.choice(philosophical_questions)
+
+            # Формируем список заголовков для промпта
+            headlines_for_prompt = [item.title for item in news_items]
+            headlines_list = '\n'.join([f"• {headline}" for headline in headlines_for_prompt])
+
+            # Создаем промпт с полными заголовками
+            prompt = f"""Вот 5 новостей:
+{headlines_list}
+
+В 2-3 предложениях (максимум 600 символов) найди общую нить между этими событиями. {random_question} НЕ ПОВТОРЯЙ заголовки, БЕЗ форматирования, КРАТКО."""
+
+            # Получаем случайные параметры API
+            api_params = self._get_random_api_params()
+
+            # Генерируем только комментарий через LLM
+            response = self.client.chat.completions.create(
+                model=api_params["model"],
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=api_params["max_tokens"],
+                temperature=api_params.get("temperature", 0.7),
+                top_p=api_params.get("top_p", 0.9),
+                presence_penalty=api_params.get("presence_penalty", 0.5),
+                frequency_penalty=api_params.get("frequency_penalty", 0.6),
+                stream=False
+            )
+
+            if response.choices and len(response.choices) > 0:
+                commentary = response.choices[0].message.content.strip()
+
+                # Ограничиваем длину комментария
+                if len(commentary) > 700:
+                    commentary = commentary[:700].rsplit('.', 1)[0] + '.'
+                    logger.info(f"Комментарий обрезан до {len(commentary)} символов")
+
+                # Склеиваем пост: заголовки (код) + комментарий (LLM)
+                final_post = f"{headlines_section}\n\n{commentary}"
+
+                logger.info(f"Гибридный пост сгенерирован на основе {len(news_items)} новостей")
+                return final_post, prompt, [item.title for item in news_items]
+            else:
+                logger.error("API вернул пустой ответ")
+                return None, None, None
+
+        except Exception as e:
+            logger.error(f"Ошибка при гибридной генерации поста: {str(e)}")
             return None, None, None
